@@ -78,15 +78,15 @@ jobs:
         if: ${{ inputs.icon_data != '' && inputs.icon_data != 'null' }}
         run: |
           echo "🎨 Processing custom icon..."
-
+          
           # Decode base64
           echo "${{ inputs.icon_data }}" | base64 -d > icon_raw.png 2>/dev/null || true
-
+          
           if [ ! -f icon_raw.png ] || [ ! -s icon_raw.png ]; then
             echo "⚠️ Invalid icon data, using default"
             exit 0
           fi
-
+          
           # Create directories
           mkdir -p android/app/src/main/res/mipmap-hdpi
           mkdir -p android/app/src/main/res/mipmap-mdpi
@@ -95,14 +95,14 @@ jobs:
           mkdir -p android/app/src/main/res/mipmap-xxxhdpi
           mkdir -p android/app/src/main/res/drawable
           mkdir -p android/app/src/main/res/drawable-v21
-
+          
           # Resize icons
           convert icon_raw.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png 2>/dev/null || true
           convert icon_raw.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png 2>/dev/null || true
           convert icon_raw.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png 2>/dev/null || true
           convert icon_raw.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png 2>/dev/null || true
           convert icon_raw.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png 2>/dev/null || true
-
+          
           echo "✅ Custom icon processed"
 
       # ============================================================
@@ -116,60 +116,60 @@ jobs:
           PACKAGE_NAME: ${{ inputs.package_name }}
         run: |
           set -e
-
+          
           echo "🚀 Building from URL: $APP_URL"
-
+          
           ESC_APP_NAME=$(printf '%s' "$APP_NAME" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
           ESC_APP_URL=$(printf '%s' "$APP_URL" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
           ESC_PACKAGE_NAME=$(printf '%s' "$PACKAGE_NAME" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
-
+          
           # Create Flutter project
           flutter create --org com.web2apk --project-name myapp myapp
           cd myapp
-
+          
           # Copy icon if exists
           if [ -d "../android/app/src/main/res" ]; then
             cp -r ../android/app/src/main/res/* android/app/src/main/res/ 2>/dev/null || true
           fi
-
+          
           # Update pubspec.yaml
           cat > pubspec.yaml << 'EOF'
           name: myapp
           description: WebView App
           publish_to: 'none'
           version: 1.0.0+1
-
+          
           environment:
             sdk: '>=3.0.0 <4.0.0'
-
+          
           dependencies:
             flutter:
               sdk: flutter
             webview_flutter: ^4.7.0
             webview_flutter_android: ^3.12.0
             webview_flutter_wkwebview: ^3.9.0
-
+          
           dev_dependencies:
             flutter_test:
               sdk: flutter
             flutter_lints: ^3.0.0
-
+          
           flutter:
             uses-material-design: true
           EOF
-
+          
           # Update main.dart
           cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
-
+          
           void main() {
             runApp(const MyApp());
           }
-
+          
           class MyApp extends StatelessWidget {
             const MyApp({super.key});
-
+          
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
@@ -180,28 +180,28 @@ jobs:
               );
             }
           }
-
+          
           class WebViewScreen extends StatefulWidget {
             const WebViewScreen({super.key});
-
+          
             @override
             State<WebViewScreen> createState() => _WebViewScreenState();
           }
-
+          
           class _WebViewScreenState extends State<WebViewScreen> {
             late final WebViewController controller;
             bool isLoading = true;
             String errorMessage = '';
-
+          
             @override
             void initState() {
               super.initState();
               _initWebView();
             }
-
+          
             void _initWebView() {
               final url = Uri.parse('__APP_URL__');
-
+              
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
                 ..setBackgroundColor(const Color(0xFF000000))
@@ -228,7 +228,7 @@ jobs:
                 )
                 ..loadRequest(url);
             }
-
+          
             @override
             Widget build(BuildContext context) {
               return Scaffold(
@@ -283,19 +283,19 @@ jobs:
             }
           }
           EOF
-
+          
           sed -i "s/__APP_NAME__/${ESC_APP_NAME}/g" lib/main.dart
           sed -i "s#__APP_URL__#${ESC_APP_URL}#g" lib/main.dart
-
+          
           # Android Manifest
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:tools="http://schemas.android.com/tools"
               package="__PACKAGE_NAME__">
-
+              
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
+              
               <application
                   android:label="__APP_NAME__"
                   android:icon="@mipmap/ic_launcher"
@@ -304,7 +304,7 @@ jobs:
                   tools:targetApi="28"
                   android:theme="@style/Theme.AppCompat.NoActionBar"
                   android:allowBackup="true">
-
+                  
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -318,22 +318,22 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-
+                  
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
               </application>
           </manifest>
           EOF
-
+          
           sed -i "s/__PACKAGE_NAME__/${ESC_PACKAGE_NAME}/g" android/app/src/main/AndroidManifest.xml
           sed -i "s/__APP_NAME__/${ESC_APP_NAME}/g" android/app/src/main/AndroidManifest.xml
-
+          
           # Update build.gradle
           sed -i "s/applicationId \".*\"/applicationId \"${ESC_PACKAGE_NAME}\"/g" android/app/build.gradle
           sed -i "s/minSdkVersion .*/minSdkVersion 21/g" android/app/build.gradle
           sed -i "s/targetSdkVersion .*/targetSdkVersion 34/g" android/app/build.gradle
-
+          
           # Build APK
           flutter pub get
           flutter clean
@@ -350,55 +350,55 @@ jobs:
           PACKAGE_NAME: ${{ inputs.package_name }}
         run: |
           set -e
-
+          
           echo "📦 Building from ZIP..."
-
+          
           mkdir -p workspace
           cd workspace
-
+          
           wget -q -O project.zip "$ZIP_URL"
-
+          
           mkdir -p project
           unzip -q -o project.zip -d project/
-
+          
           PUBSPEC_PATH=$(find project -maxdepth 4 -name "pubspec.yaml" | head -n 1)
           if [ -z "$PUBSPEC_PATH" ]; then
             echo "❌ pubspec.yaml not found!"
             exit 1
           fi
-
+          
           PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
           echo "📂 Project found: $PROJECT_DIR"
-
+          
           cd "$PROJECT_DIR"
-
+          
           rm -rf build/ .dart_tool/
-
+          
           # Add webview_flutter if missing
           if ! grep -q "webview_flutter:" pubspec.yaml; then
             echo "📝 Adding webview_flutter..."
             sed -i '/dependencies:/a\  webview_flutter: ^4.7.0\n  webview_flutter_android: ^3.12.0\n  webview_flutter_wkwebview: ^3.9.0' pubspec.yaml
           fi
-
+          
           # Update build.gradle
           if [ -f "android/app/build.gradle" ]; then
             sed -i "s/applicationId \".*\"/applicationId \"${PACKAGE_NAME}\"/g" android/app/build.gradle
             sed -i "s/minSdkVersion .*/minSdkVersion 21/g" android/app/build.gradle
             sed -i "s/targetSdkVersion .*/targetSdkVersion 34/g" android/app/build.gradle
           fi
-
+          
           # Update AndroidManifest
           if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
             sed -i "s/package=\".*\"/package=\"${PACKAGE_NAME}\"/g" android/app/src/main/AndroidManifest.xml
             sed -i "s/android:label=\".*\"/android:label=\"${APP_NAME}\"/g" android/app/src/main/AndroidManifest.xml
           fi
-
+          
           # Copy icon if exists
           if [ -d "../../android/app/src/main/res" ]; then
             mkdir -p android/app/src/main/res
             cp -r ../../android/app/src/main/res/* android/app/src/main/res/ 2>/dev/null || true
           fi
-
+          
           # Build APK
           flutter pub get
           flutter clean
@@ -431,7 +431,10 @@ jobs:
           path: ${{ steps.locate_apk.outputs.apk_path }}
           retention-days: 7
 
-      - name: Send to Telegram
+      # ============================================================
+      # SEND TO TELEGRAM
+      # ============================================================
+      - name: Send Success to Telegram
         if: success()
         uses: appleboy/telegram-action@master
         with:
@@ -439,14 +442,16 @@ jobs:
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             ✅ *Build Berhasil!*
-
+            
             📱 Nama: ${{ inputs.app_name }}
             📦 Package: ${{ inputs.package_name }}
-            🎨 Icon: ${{ inputs.icon_data != '' && inputs.icon_data != 'null' && 'Custom ✅' || 'Default' }}
             🆔 Job: ${{ inputs.job_id }}
             ⏱️ $(date)
           document: ${{ steps.locate_apk.outputs.apk_path }}
 
+      # ============================================================
+      # NOTIFY FAILURE - FIXED
+      # ============================================================
       - name: Notify Failure
         if: failure()
         uses: appleboy/telegram-action@master
@@ -455,9 +460,24 @@ jobs:
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             ❌ *Build Gagal!*
-
+            
             📱 Nama: ${{ inputs.app_name }}
             👤 User: ${{ inputs.user_id }}
             📦 Package: ${{ inputs.package_name }}
-            🎨 Icon: ${{ inputs.icon_data != '' && inputs.icon_data != 'null' && 'Custom' : 'Default' }}
             🆔 Job: ${{ inputs.job_id }}
+            📌 Icon: Custom
+          
+          # Ganti dengan command terpisah untuk menghindari ternary
+
+      # ============================================================
+      # NOTIFY FAILURE - TAMBAHAN UNTUK CEK ICON
+      # ============================================================
+      - name: Notify Failure with Icon Info
+        if: failure() && inputs.icon_data != '' && inputs.icon_data != 'null'
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.ADMIN_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🎨 *Icon Status: Custom Icon Digunakan*
+            📌 Size: ${#inputs.icon_data} chars
