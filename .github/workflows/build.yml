@@ -61,24 +61,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      # Setup environment variables
-      - name: 🔧 Setup environment
-        run: |
-          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_ENV
-          echo "HOME=$HOME" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          
-          # Create necessary directories
-          mkdir -p $HOME/.android
-          mkdir -p /usr/local/android-sdk/licenses
-          
-          # Accept Android licenses
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $HOME/.android/licenses/android-sdk-license
-          echo "84831b9409646a918e30573bab4c9c91346d8abd" > $HOME/.android/licenses/android-sdk-preview-license
-          echo "d975f751698a77b662f1254ddbeed3901e976f5a" > $HOME/.android/licenses/intel-android-extra-license
-          
-          echo "✅ Environment setup complete"
-
       # Setup Java
       - name: ☕ Setup Java
         uses: actions/setup-java@v4
