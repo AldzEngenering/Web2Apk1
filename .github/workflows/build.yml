@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       package_name:
-        description: 'Package Name'
+        description: 'Package Name (com.example.app)'
         required: true
         type: string
       user_id:
@@ -31,6 +31,28 @@ on:
         description: 'Base64 Icon Data'
         required: false
         type: string
+      splash_screen:
+        description: 'Enable Splash Screen'
+        required: false
+        type: boolean
+        default: true
+      app_version:
+        description: 'App Version (1.0.0)'
+        required: false
+        type: string
+        default: '1.0.0'
+      build_number:
+        description: 'Build Number'
+        required: false
+        type: number
+        default: 1
+
+env:
+  FLUTTER_VERSION: '3.22.4'
+  JAVA_VERSION: '17'
+  ANDROID_SDK_VERSION: '34'
+  ANDROID_BUILD_TOOLS: '34.0.0'
+  MIN_SDK_VERSION: '21'
 
 jobs:
   build:
@@ -38,56 +60,89 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - name: Check Inputs
+      - name: 🚀 Check Inputs
+        id: check_inputs
         run: |
           if [ -z "${{ inputs.url }}" ] && [ -z "${{ inputs.zip_url }}" ]; then
             echo "❌ Error: url atau zip_url harus diisi!"
             exit 1
           fi
-          echo "✅ Input valid"
+          
+          if [ -z "${{ inputs.app_name }}" ]; then
+            echo "❌ Error: app_name harus diisi!"
+            exit 1
+          fi
+          
+          if [ -z "${{ inputs.package_name }}" ]; then
+            echo "❌ Error: package_name harus diisi!"
+            exit 1
+          fi
+          
+          echo "✅ All inputs valid"
+          echo "app_name=${{ inputs.app_name }}" >> $GITHUB_OUTPUT
+          echo "package_name=${{ inputs.package_name }}" >> $GITHUB_OUTPUT
+          echo "user_id=${{ inputs.user_id }}" >> $GITHUB_OUTPUT
 
-      - name: Setup Java
+      - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '17'
+          java-version: ${{ env.JAVA_VERSION }}
 
-      - name: Setup Flutter
+      - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.4'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
+          cache: true
 
-      - name: Setup Android SDK
+      - name: 📱 Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: |
             platform-tools
-            platforms;android-34
-            build-tools;34.0.0
+            platforms;android-${{ env.ANDROID_SDK_VERSION }}
+            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
 
-      - name: Install Tools
+      - name: 🔧 Install Required Tools
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y wget unzip curl ninja-build cmake git jq imagemagick
+          sudo apt-get install -y \
+            wget \
+            unzip \
+            curl \
+            ninja-build \
+            cmake \
+            git \
+            jq \
+            imagemagick \
+            file \
+            tree \
+            gnupg2
 
-      # ============================================================
-      # PROCESS ICON
-      # ============================================================
-      - name: Process Custom Icon
+      - name: 🎨 Process Custom Icon
         if: ${{ inputs.icon_data != '' && inputs.icon_data != 'null' }}
+        id: process_icon
         run: |
           echo "🎨 Processing custom icon..."
-          
-          # Decode base64
-          echo "${{ inputs.icon_data }}" | base64 -d > icon_raw.png 2>/dev/null || true
-          
-          if [ ! -f icon_raw.png ] || [ ! -s icon_raw.png ]; then
-            echo "⚠️ Invalid icon data, using default"
+
+          # Create temp directory
+          mkdir -p temp_icons
+
+          # Decode base64 with error handling
+          if ! echo "${{ inputs.icon_data }}" | base64 -d > temp_icons/icon_raw.png 2>/dev/null; then
+            echo "⚠️ Invalid base64 data, using default icon"
             exit 0
           fi
-          
-          # Create directories
+
+          # Check if file is valid image
+          if ! file temp_icons/icon_raw.png | grep -qiE 'image|png|jpeg'; then
+            echo "⚠️ Invalid image file, using default icon"
+            rm -rf temp_icons
+            exit 0
+          fi
+
+          # Create Android icon directories
           mkdir -p android/app/src/main/res/mipmap-hdpi
           mkdir -p android/app/src/main/res/mipmap-mdpi
           mkdir -p android/app/src/main/res/mipmap-xhdpi
@@ -95,113 +150,168 @@ jobs:
           mkdir -p android/app/src/main/res/mipmap-xxxhdpi
           mkdir -p android/app/src/main/res/drawable
           mkdir -p android/app/src/main/res/drawable-v21
+
+          # Generate adaptive icons
+          convert temp_icons/icon_raw.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert temp_icons/icon_raw.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert temp_icons/icon_raw.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert temp_icons/icon_raw.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert temp_icons/icon_raw.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           
-          # Resize icons
-          convert icon_raw.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png 2>/dev/null || true
-          convert icon_raw.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png 2>/dev/null || true
-          convert icon_raw.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png 2>/dev/null || true
-          convert icon_raw.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png 2>/dev/null || true
-          convert icon_raw.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png 2>/dev/null || true
-          
-          echo "✅ Custom icon processed"
+          # Create round icons (same as regular for simplicity)
+          cp android/app/src/main/res/mipmap-mdpi/ic_launcher.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-hdpi/ic_launcher.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xhdpi/ic_launcher.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+
+          echo "✅ Custom icon processed successfully"
+          echo "icon_status=custom" >> $GITHUB_OUTPUT
+          rm -rf temp_icons
+
+      - name: 🎨 Use Default Icon
+        if: ${{ inputs.icon_data == '' || inputs.icon_data == 'null' }}
+        id: default_icon
+        run: |
+          echo "🖼️ Using default Flutter icon"
+          echo "icon_status=default" >> $GITHUB_OUTPUT
 
       # ============================================================
       # BUILD FROM URL
       # ============================================================
-      - name: Build from URL
+      - name: 🏗️ Build from URL
         if: ${{ inputs.url != '' && inputs.url != 'null' }}
+        id: build_url
         env:
           APP_NAME: ${{ inputs.app_name }}
           APP_URL: ${{ inputs.url }}
           PACKAGE_NAME: ${{ inputs.package_name }}
+          APP_VERSION: ${{ inputs.app_version }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          SPLASH_ENABLED: ${{ inputs.splash_screen }}
         run: |
           set -e
-          
+
           echo "🚀 Building from URL: $APP_URL"
-          
+          echo "📱 App Name: $APP_NAME"
+          echo "📦 Package: $PACKAGE_NAME"
+          echo "📌 Version: $APP_VERSION ($BUILD_NUMBER)"
+
+          # Escape special characters
           ESC_APP_NAME=$(printf '%s' "$APP_NAME" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
           ESC_APP_URL=$(printf '%s' "$APP_URL" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
           ESC_PACKAGE_NAME=$(printf '%s' "$PACKAGE_NAME" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
-          
+
           # Create Flutter project
           flutter create --org com.web2apk --project-name myapp myapp
           cd myapp
-          
-          # Copy icon if exists
-          if [ -d "../android/app/src/main/res" ]; then
+
+          # Copy custom icon if exists
+          if [ -d "../android/app/src/main/res" ] && [ "$(ls -A ../android/app/src/main/res)" ]; then
             cp -r ../android/app/src/main/res/* android/app/src/main/res/ 2>/dev/null || true
+            echo "✅ Custom icons copied"
           fi
-          
+
           # Update pubspec.yaml
           cat > pubspec.yaml << 'EOF'
           name: myapp
           description: WebView App
           publish_to: 'none'
-          version: 1.0.0+1
-          
+          version: APP_VERSION+BUILD_NUMBER
+
           environment:
             sdk: '>=3.0.0 <4.0.0'
-          
+
           dependencies:
             flutter:
               sdk: flutter
             webview_flutter: ^4.7.0
             webview_flutter_android: ^3.12.0
             webview_flutter_wkwebview: ^3.9.0
-          
+            connectivity_plus: ^6.0.0
+            flutter_native_splash: ^2.4.0
+
           dev_dependencies:
             flutter_test:
               sdk: flutter
             flutter_lints: ^3.0.0
-          
+
           flutter:
             uses-material-design: true
           EOF
-          
-          # Update main.dart
+
+          # Replace version placeholders
+          sed -i "s/APP_VERSION/${APP_VERSION}/g" pubspec.yaml
+          sed -i "s/BUILD_NUMBER/${BUILD_NUMBER}/g" pubspec.yaml
+
+          # Setup splash screen if enabled
+          if [ "$SPLASH_ENABLED" = "true" ]; then
+            flutter pub get
+            flutter pub run flutter_native_splash:create
+          fi
+
+          # Create main.dart
           cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
-          
+          import 'package:connectivity_plus/connectivity_plus.dart';
+
           void main() {
             runApp(const MyApp());
           }
-          
+
           class MyApp extends StatelessWidget {
             const MyApp({super.key});
-          
+
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
                 title: '__APP_NAME__',
-                theme: ThemeData.dark(),
+                theme: ThemeData(
+                  brightness: Brightness.dark,
+                  primaryColor: Colors.blue,
+                  appBarTheme: const AppBarTheme(
+                    backgroundColor: Colors.black,
+                    elevation: 0,
+                  ),
+                ),
                 home: const WebViewScreen(),
                 debugShowCheckedModeBanner: false,
               );
             }
           }
-          
+
           class WebViewScreen extends StatefulWidget {
             const WebViewScreen({super.key});
-          
+
             @override
             State<WebViewScreen> createState() => _WebViewScreenState();
           }
-          
+
           class _WebViewScreenState extends State<WebViewScreen> {
             late final WebViewController controller;
             bool isLoading = true;
+            bool hasError = false;
             String errorMessage = '';
-          
+            bool isConnected = true;
+
             @override
             void initState() {
               super.initState();
               _initWebView();
+              _checkConnectivity();
             }
-          
+
+            Future<void> _checkConnectivity() async {
+              final result = await Connectivity().checkConnectivity();
+              setState(() {
+                isConnected = result != ConnectivityResult.none;
+              });
+            }
+
             void _initWebView() {
               final url = Uri.parse('__APP_URL__');
-              
+
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
                 ..setBackgroundColor(const Color(0xFF000000))
@@ -210,6 +320,7 @@ jobs:
                     onPageStarted: (String url) {
                       setState(() {
                         isLoading = true;
+                        hasError = false;
                         errorMessage = '';
                       });
                     },
@@ -221,81 +332,160 @@ jobs:
                     onWebResourceError: (WebResourceError error) {
                       setState(() {
                         isLoading = false;
-                        errorMessage = 'Error: ${error.description}';
+                        hasError = true;
+                        errorMessage = error.description;
                       });
+                    },
+                    onProgress: (int progress) {
+                      // Update progress if needed
                     },
                   ),
                 )
                 ..loadRequest(url);
             }
-          
+
+            void _reload() {
+              setState(() {
+                hasError = false;
+                errorMessage = '';
+                isLoading = true;
+              });
+              controller.reload();
+            }
+
             @override
             Widget build(BuildContext context) {
               return Scaffold(
                 body: Stack(
                   children: [
-                    WebViewWidget(controller: controller),
-                    if (isLoading)
+                    if (isConnected)
+                      WebViewWidget(controller: controller)
+                    else
+                      const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.wifi_off, color: Colors.grey, size: 64),
+                            SizedBox(height: 16),
+                            Text(
+                              'No Internet Connection',
+                              style: TextStyle(color: Colors.white, fontSize: 18),
+                            ),
+                            SizedBox(height: 8),
+                            Text(
+                              'Please check your connection and try again.',
+                              style: TextStyle(color: Colors.grey, fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (isLoading && !hasError)
                       const Center(
                         child: CircularProgressIndicator(
                           color: Colors.blue,
                           strokeWidth: 3.0,
                         ),
                       ),
-                    if (errorMessage.isNotEmpty)
+                    if (hasError)
                       Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        child: Padding(
+                          padding: const EdgeInsets.all(24.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.error_outline,
+                                color: Colors.red,
+                                size: 64,
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Gagal Memuat Halaman',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                errorMessage,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 24),
+                              ElevatedButton.icon(
+                                onPressed: _reload,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Coba Lagi'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.blue,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 32,
+                                    vertical: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    Positioned(
+                      top: 40,
+                      right: 16,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
                           children: [
-                            const Icon(Icons.error_outline, color: Colors.red, size: 48),
-                            const SizedBox(height: 16),
+                            Icon(
+                              isConnected ? Icons.wifi : Icons.wifi_off,
+                              color: isConnected ? Colors.green : Colors.red,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 4),
                             Text(
-                              'Gagal Memuat Halaman',
+                              isConnected ? 'Online' : 'Offline',
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              errorMessage,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.grey, fontSize: 14),
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  errorMessage = '';
-                                  isLoading = true;
-                                });
-                                controller.reload();
-                              },
-                              child: const Text('Coba Lagi'),
                             ),
                           ],
                         ),
                       ),
+                    ),
                   ],
                 ),
               );
             }
           }
           EOF
-          
+
+          # Replace placeholders
           sed -i "s/__APP_NAME__/${ESC_APP_NAME}/g" lib/main.dart
           sed -i "s#__APP_URL__#${ESC_APP_URL}#g" lib/main.dart
-          
-          # Android Manifest
+
+          # Create Android Manifest
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:tools="http://schemas.android.com/tools"
               package="__PACKAGE_NAME__">
-              
+
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
               <application
                   android:label="__APP_NAME__"
                   android:icon="@mipmap/ic_launcher"
@@ -303,8 +493,9 @@ jobs:
                   android:usesCleartextTraffic="true"
                   tools:targetApi="28"
                   android:theme="@style/Theme.AppCompat.NoActionBar"
-                  android:allowBackup="true">
-                  
+                  android:allowBackup="true"
+                  android:hardwareAccelerated="true">
+
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -318,166 +509,302 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-                  
+
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
               </application>
           </manifest>
           EOF
-          
+
+          # Replace placeholders
           sed -i "s/__PACKAGE_NAME__/${ESC_PACKAGE_NAME}/g" android/app/src/main/AndroidManifest.xml
           sed -i "s/__APP_NAME__/${ESC_APP_NAME}/g" android/app/src/main/AndroidManifest.xml
-          
+
           # Update build.gradle
           sed -i "s/applicationId \".*\"/applicationId \"${ESC_PACKAGE_NAME}\"/g" android/app/build.gradle
-          sed -i "s/minSdkVersion .*/minSdkVersion 21/g" android/app/build.gradle
-          sed -i "s/targetSdkVersion .*/targetSdkVersion 34/g" android/app/build.gradle
-          
-          # Build APK
+          sed -i "s/minSdkVersion .*/minSdkVersion ${MIN_SDK_VERSION}/g" android/app/build.gradle
+          sed -i "s/targetSdkVersion .*/targetSdkVersion ${ANDROID_SDK_VERSION}/g" android/app/build.gradle
+          sed -i "s/versionCode .*/versionCode ${BUILD_NUMBER}/g" android/app/build.gradle
+          sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/g" android/app/build.gradle
+
+          # Add internet permission to build.gradle if needed
+          echo '✅ Project configured'
+
+          # Get dependencies and build
           flutter pub get
           flutter clean
-          flutter build apk --release
+          
+          # Build the APK
+          flutter build apk --release --split-per-abi
+          
+          echo "✅ Build completed successfully"
+          cd ../..
 
       # ============================================================
       # BUILD FROM ZIP
       # ============================================================
-      - name: Build from ZIP
+      - name: 📦 Build from ZIP
         if: ${{ inputs.zip_url != '' && inputs.zip_url != 'null' }}
+        id: build_zip
         env:
           ZIP_URL: ${{ inputs.zip_url }}
           APP_NAME: ${{ inputs.app_name }}
           PACKAGE_NAME: ${{ inputs.package_name }}
+          APP_VERSION: ${{ inputs.app_version }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
           set -e
-          
+
           echo "📦 Building from ZIP..."
+          echo "📱 App Name: $APP_NAME"
+          echo "📦 Package: $PACKAGE_NAME"
           
           mkdir -p workspace
           cd workspace
-          
-          wget -q -O project.zip "$ZIP_URL"
-          
+
+          echo "⬇️ Downloading ZIP..."
+          wget -q --show-progress -O project.zip "$ZIP_URL"
+
+          if [ ! -f project.zip ]; then
+            echo "❌ Failed to download ZIP"
+            exit 1
+          fi
+
+          echo "📂 Extracting..."
           mkdir -p project
           unzip -q -o project.zip -d project/
-          
+
+          # Find pubspec.yaml
           PUBSPEC_PATH=$(find project -maxdepth 4 -name "pubspec.yaml" | head -n 1)
           if [ -z "$PUBSPEC_PATH" ]; then
             echo "❌ pubspec.yaml not found!"
+            ls -la project/
             exit 1
           fi
-          
+
           PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
           echo "📂 Project found: $PROJECT_DIR"
-          
+
           cd "$PROJECT_DIR"
-          
-          rm -rf build/ .dart_tool/
-          
+
+          # Clean previous builds
+          rm -rf build/ .dart_tool/ pubspec.lock
+
           # Add webview_flutter if missing
           if ! grep -q "webview_flutter:" pubspec.yaml; then
-            echo "📝 Adding webview_flutter..."
-            sed -i '/dependencies:/a\  webview_flutter: ^4.7.0\n  webview_flutter_android: ^3.12.0\n  webview_flutter_wkwebview: ^3.9.0' pubspec.yaml
+            echo "📝 Adding webview_flutter dependencies..."
+            sed -i '/dependencies:/a\  webview_flutter: ^4.7.0\n  webview_flutter_android: ^3.12.0\n  webview_flutter_wkwebview: ^3.9.0\n  connectivity_plus: ^6.0.0' pubspec.yaml
           fi
-          
+
+          # Update version
+          if grep -q "version:" pubspec.yaml; then
+            sed -i "s/version:.*/version: ${APP_VERSION}+${BUILD_NUMBER}/" pubspec.yaml
+          fi
+
           # Update build.gradle
           if [ -f "android/app/build.gradle" ]; then
+            echo "📝 Updating build.gradle..."
             sed -i "s/applicationId \".*\"/applicationId \"${PACKAGE_NAME}\"/g" android/app/build.gradle
-            sed -i "s/minSdkVersion .*/minSdkVersion 21/g" android/app/build.gradle
-            sed -i "s/targetSdkVersion .*/targetSdkVersion 34/g" android/app/build.gradle
+            sed -i "s/minSdkVersion .*/minSdkVersion ${MIN_SDK_VERSION}/g" android/app/build.gradle
+            sed -i "s/targetSdkVersion .*/targetSdkVersion ${ANDROID_SDK_VERSION}/g" android/app/build.gradle
+            sed -i "s/versionCode .*/versionCode ${BUILD_NUMBER}/g" android/app/build.gradle
+            sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/g" android/app/build.gradle
           fi
-          
+
           # Update AndroidManifest
           if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            echo "📝 Updating AndroidManifest..."
             sed -i "s/package=\".*\"/package=\"${PACKAGE_NAME}\"/g" android/app/src/main/AndroidManifest.xml
             sed -i "s/android:label=\".*\"/android:label=\"${APP_NAME}\"/g" android/app/src/main/AndroidManifest.xml
+            
+            # Add internet permission if missing
+            if ! grep -q "INTERNET" android/app/src/main/AndroidManifest.xml; then
+              sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' android/app/src/main/AndroidManifest.xml
+            fi
           fi
-          
-          # Copy icon if exists
-          if [ -d "../../android/app/src/main/res" ]; then
+
+          # Copy custom icon if exists
+          if [ -d "../../android/app/src/main/res" ] && [ "$(ls -A ../../android/app/src/main/res 2>/dev/null)" ]; then
+            echo "🎨 Copying custom icons..."
             mkdir -p android/app/src/main/res
             cp -r ../../android/app/src/main/res/* android/app/src/main/res/ 2>/dev/null || true
           fi
-          
-          # Build APK
+
+          # Get dependencies and build
           flutter pub get
           flutter clean
-          flutter build apk --release
+          
+          # Build the APK
+          flutter build apk --release --split-per-abi
+          
+          echo "✅ Build completed successfully"
+          cd ../../..
 
       # ============================================================
       # LOCATE & UPLOAD APK
       # ============================================================
-      - name: Locate APK
+      - name: 📍 Locate APK
         if: success()
         id: locate_apk
         run: |
-          APK_PATH=$(find . -path "*/build/app/outputs/flutter-apk/app-release.apk" 2>/dev/null | head -n 1)
+          echo "🔍 Searching for APK..."
+          
+          # Search in various locations
+          APK_PATH=$(find . -type f -name "app-release.apk" -path "*/build/app/outputs/flutter-apk/*" 2>/dev/null | head -n 1)
+          
           if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find . -name "*.apk" 2>/dev/null | head -n 1)
+            APK_PATH=$(find . -type f -name "*.apk" -path "*/build/app/outputs/flutter-apk/*" 2>/dev/null | head -n 1)
           fi
+          
           if [ -z "$APK_PATH" ]; then
-            echo "❌ APK not found!"
+            APK_PATH=$(find . -type f -name "*.apk" 2>/dev/null | grep -v ".gradle" | head -n 1)
+          fi
+          
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ No APK found!"
+            find . -name "*.apk" 2>/dev/null
             exit 1
           fi
-          echo "✅ APK: $APK_PATH"
-          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
-          ls -la "$APK_PATH"
+          
+          echo "✅ APK found at: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          
+          # Show file info
+          ls -lh "$APK_PATH"
+          file "$APK_PATH"
 
-      - name: Upload APK Artifact
+      - name: 📤 Upload APK Artifact
         if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-${{ inputs.package_name }}-${{ inputs.job_id }}
+          path: ${{ steps.locate_apk.outputs.apk_path }}
+          retention-days: 7
+          compression-level: 6
+
+      - name: 📤 Upload APK to Release
+        if: success()
+        id: upload_release
         uses: actions/upload-artifact@v4
         with:
           name: apk-builds
           path: ${{ steps.locate_apk.outputs.apk_path }}
-          retention-days: 7
+          retention-days: 30
+
+      - name: 📊 Get APK Info
+        if: success()
+        id: apk_info
+        run: |
+          APK_PATH="${{ steps.locate_apk.outputs.apk_path }}"
+          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+          APK_MD5=$(md5sum "$APK_PATH" | cut -d' ' -f1)
+          
+          echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
+          echo "apk_md5=$APK_MD5" >> $GITHUB_OUTPUT
+          echo "📊 APK Size: $APK_SIZE"
+          echo "🔑 MD5: $APK_MD5"
 
       # ============================================================
       # SEND TO TELEGRAM
       # ============================================================
-      - name: Send Success to Telegram
+      - name: 📨 Send Success to Telegram
         if: success()
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@v1.1.0
         with:
           to: ${{ inputs.user_id }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            ✅ *Build Berhasil!*
+            ✅ *BUILD BERHASIL!*
             
-            📱 Nama: ${{ inputs.app_name }}
-            📦 Package: ${{ inputs.package_name }}
-            🆔 Job: ${{ inputs.job_id }}
-            ⏱️ $(date)
+            📱 *Nama:* ${{ inputs.app_name }}
+            📦 *Package:* ${{ inputs.package_name }}
+            📌 *Version:* ${{ inputs.app_version }} (Build ${{ inputs.build_number }})
+            🎨 *Icon:* ${{ steps.process_icon.outputs.icon_status || steps.default_icon.outputs.icon_status || 'default' }}
+            🆔 *Job ID:* ${{ inputs.job_id || 'N/A' }}
+            📊 *Size:* ${{ steps.apk_info.outputs.apk_size || 'Unknown' }}
+            🔑 *MD5:* ${{ steps.apk_info.outputs.apk_md5 || 'Unknown' }}
+            
+            🚀 *Download:* [Click here to download](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            
+            ⏱️ *Date:* $(date '+%Y-%m-%d %H:%M:%S %Z')
           document: ${{ steps.locate_apk.outputs.apk_path }}
+          file_name: ${{ inputs.app_name }}-${{ inputs.package_name }}-${{ inputs.job_id }}.apk
 
-      # ============================================================
-      # NOTIFY FAILURE - FIXED
-      # ============================================================
-      - name: Notify Failure
+      - name: 📨 Send Failure to Admin
         if: failure()
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@v1.1.0
         with:
           to: ${{ secrets.ADMIN_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ❌ *BUILD GAGAL!*
+            
+            📱 *Nama:* ${{ inputs.app_name }}
+            👤 *User:* ${{ inputs.user_id }}
+            📦 *Package:* ${{ inputs.package_name }}
+            🎨 *Icon:* ${{ steps.process_icon.outputs.icon_status || 'default' }}
+            🆔 *Job ID:* ${{ inputs.job_id || 'N/A' }}
+            
+            🔗 *Details:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ⏱️ *Date:* $(date '+%Y-%m-%d %H:%M:%S %Z')
+
+      - name: 📨 Send User Failure
+        if: failure() && inputs.user_id != ''
+        uses: appleboy/telegram-action@v1.1.0
+        with:
+          to: ${{ inputs.user_id }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             ❌ *Build Gagal!*
             
+            Mohon maaf, build aplikasi Anda gagal.
+            
             📱 Nama: ${{ inputs.app_name }}
-            👤 User: ${{ inputs.user_id }}
-            📦 Package: ${{ inputs.package_name }}
-            🆔 Job: ${{ inputs.job_id }}
-            📌 Icon: Custom
-          
-          # Ganti dengan command terpisah untuk menghindari ternary
+            🆔 Job: ${{ inputs.job_id || 'N/A' }}
+            
+            Silakan periksa kembali URL atau file ZIP Anda dan coba lagi.
+            
+            Jika masalah berlanjut, hubungi admin.
 
-      # ============================================================
-      # NOTIFY FAILURE - TAMBAHAN UNTUK CEK ICON
-      # ============================================================
-      - name: Notify Failure with Icon Info
-        if: failure() && inputs.icon_data != '' && inputs.icon_data != 'null'
-        uses: appleboy/telegram-action@master
+      - name: 📋 Generate Build Report
+        if: always()
+        run: |
+          cat << EOF > build-report.txt
+          ============================================
+              BUILD REPORT - Web2APK Builder
+          ============================================
+          
+          📱 App Name        : ${{ inputs.app_name }}
+          📦 Package Name    : ${{ inputs.package_name }}
+          📌 Version         : ${{ inputs.app_version }} (Build ${{ inputs.build_number }})
+          🎨 Icon Status     : ${{ steps.process_icon.outputs.icon_status || 'default' }}
+          🆔 Job ID          : ${{ inputs.job_id || 'N/A' }}
+          👤 User ID         : ${{ inputs.user_id }}
+          🌐 Build Type      : ${{ inputs.url != '' && 'URL' || 'ZIP' }}
+          
+          📊 Build Status    : ${{ job.status }}
+          🔗 Workflow URL    : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          ⏱️ Build Time       : $(date '+%Y-%m-%d %H:%M:%S %Z')
+          ============================================
+          EOF
+          
+          echo "📋 Build report generated"
+
+      - name: 📤 Upload Build Report
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          to: ${{ secrets.ADMIN_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            🎨 *Icon Status: Custom Icon Digunakan*
-            📌 Size: ${#inputs.icon_data} chars
+          name: build-report
+          path: build-report.txt
+          retention-days: 7
+
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up workspace..."
+          rm -rf workspace 2>/dev/null || true
+          rm -rf temp_icons 2>/dev/null || true
+          echo "✅ Cleanup completed"
