@@ -54,31 +54,87 @@ env:
   ANDROID_BUILD_TOOLS: '34.0.0'
   MIN_SDK_VERSION: '21'
 
+# Add permissions
+permissions:
+  contents: read
+  actions: write
+  checks: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
+    
+    # Add defaults for shell
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: 🚀 Check Inputs
-        id: check_inputs
+      # FIRST STEP: Checkout is REQUIRED for all GitHub Actions
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+          sparse-checkout-cone-mode: false
+
+      # Setup environment variables
+      - name: 🔧 Setup Environment
+        id: setup_env
         run: |
-          if [ -z "${{ inputs.url }}" ] && [ -z "${{ inputs.zip_url }}" ]; then
-            echo "❌ Error: url atau zip_url harus diisi!"
-            exit 1
-          fi
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+          echo "HOME=$HOME" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           
+          # Create necessary directories
+          mkdir -p $HOME/.android
+          mkdir -p $ANDROID_HOME/licenses
+          
+          # Accept Android licenses
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
+          echo "d975f751698a77b662f1254ddbeed3901e976f5a" > $ANDROID_HOME/licenses/intel-android-extra-license
+          
+          # Set permissions
+          chmod -R 755 $ANDROID_HOME/licenses 2>/dev/null || true
+          
+          echo "✅ Environment setup completed"
+
+      - name: 🚀 Validate Inputs
+        id: validate_inputs
+        run: |
+          echo "Validating inputs..."
+          
+          # Check required inputs
           if [ -z "${{ inputs.app_name }}" ]; then
-            echo "❌ Error: app_name harus diisi!"
+            echo "❌ Error: app_name is required!"
             exit 1
           fi
           
           if [ -z "${{ inputs.package_name }}" ]; then
-            echo "❌ Error: package_name harus diisi!"
+            echo "❌ Error: package_name is required!"
             exit 1
           fi
           
-          echo "✅ All inputs valid"
+          if [ -z "${{ inputs.user_id }}" ]; then
+            echo "❌ Error: user_id is required!"
+            exit 1
+          fi
+          
+          if [ -z "${{ inputs.url }}" ] && [ -z "${{ inputs.zip_url }}" ]; then
+            echo "❌ Error: Either url or zip_url must be provided!"
+            exit 1
+          fi
+          
+          # Validate package name format
+          if ! echo "${{ inputs.package_name }}" | grep -qE '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'; then
+            echo "⚠️ Warning: Package name format might be invalid"
+          fi
+          
+          echo "✅ All inputs validated"
           echo "app_name=${{ inputs.app_name }}" >> $GITHUB_OUTPUT
           echo "package_name=${{ inputs.package_name }}" >> $GITHUB_OUTPUT
           echo "user_id=${{ inputs.user_id }}" >> $GITHUB_OUTPUT
@@ -88,13 +144,7 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: ${{ env.JAVA_VERSION }}
-
-      - name: 🐦 Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
-          cache: true
+          cache: 'gradle'
 
       - name: 📱 Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -103,8 +153,19 @@ jobs:
             platform-tools
             platforms;android-${{ env.ANDROID_SDK_VERSION }}
             build-tools;${{ env.ANDROID_BUILD_TOOLS }}
+            extras;google;m2repository
+            extras;android;m2repository
+          accept-android-sdk-licenses: true
 
-      - name: 🔧 Install Required Tools
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+          cache-key: 'flutter-:os:-:channel:-:version:-:arch:-:hash:' # Optimize cache
+
+      - name: 🔧 Install System Dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y \
@@ -118,63 +179,68 @@ jobs:
             imagemagick \
             file \
             tree \
-            gnupg2
+            gnupg2 \
+            ca-certificates \
+            software-properties-common \
+            xz-utils \
+            zip \
+            unzip \
+            tar
+          
+          # Verify installations
+          echo "✅ System dependencies installed"
+          flutter --version
+          java -version
+          git --version
 
       - name: 🎨 Process Custom Icon
         if: ${{ inputs.icon_data != '' && inputs.icon_data != 'null' }}
         id: process_icon
         run: |
           echo "🎨 Processing custom icon..."
-
-          # Create temp directory
-          mkdir -p temp_icons
-
-          # Decode base64 with error handling
-          if ! echo "${{ inputs.icon_data }}" | base64 -d > temp_icons/icon_raw.png 2>/dev/null; then
-            echo "⚠️ Invalid base64 data, using default icon"
-            exit 0
-          fi
-
-          # Check if file is valid image
-          if ! file temp_icons/icon_raw.png | grep -qiE 'image|png|jpeg'; then
-            echo "⚠️ Invalid image file, using default icon"
-            rm -rf temp_icons
-            exit 0
-          fi
-
-          # Create Android icon directories
-          mkdir -p android/app/src/main/res/mipmap-hdpi
-          mkdir -p android/app/src/main/res/mipmap-mdpi
-          mkdir -p android/app/src/main/res/mipmap-xhdpi
-          mkdir -p android/app/src/main/res/mipmap-xxhdpi
-          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
-          mkdir -p android/app/src/main/res/drawable
-          mkdir -p android/app/src/main/res/drawable-v21
-
-          # Generate adaptive icons
-          convert temp_icons/icon_raw.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
-          convert temp_icons/icon_raw.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
-          convert temp_icons/icon_raw.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
-          convert temp_icons/icon_raw.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-          convert temp_icons/icon_raw.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           
-          # Create round icons (same as regular for simplicity)
-          cp android/app/src/main/res/mipmap-mdpi/ic_launcher.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
-          cp android/app/src/main/res/mipmap-hdpi/ic_launcher.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
-          cp android/app/src/main/res/mipmap-xhdpi/ic_launcher.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
-          cp android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
-          cp android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
-
-          echo "✅ Custom icon processed successfully"
+          # Create necessary directories
+          mkdir -p $GITHUB_WORKSPACE/icons
+          
+          # Decode base64 icon
+          echo "${{ inputs.icon_data }}" | base64 -d > $GITHUB_WORKSPACE/icons/icon_raw.png 2>/dev/null || true
+          
+          # Check if file is valid
+          if [ ! -f $GITHUB_WORKSPACE/icons/icon_raw.png ] || [ ! -s $GITHUB_WORKSPACE/icons/icon_raw.png ]; then
+            echo "⚠️ Invalid icon data, using default icon"
+            echo "icon_status=default" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Validate image
+          if ! file $GITHUB_WORKSPACE/icons/icon_raw.png | grep -qiE 'image|png|jpeg'; then
+            echo "⚠️ Invalid image file, using default icon"
+            echo "icon_status=default" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "✅ Custom icon validated"
           echo "icon_status=custom" >> $GITHUB_OUTPUT
-          rm -rf temp_icons
+          echo "icon_path=$GITHUB_WORKSPACE/icons/icon_raw.png" >> $GITHUB_OUTPUT
 
-      - name: 🎨 Use Default Icon
-        if: ${{ inputs.icon_data == '' || inputs.icon_data == 'null' }}
-        id: default_icon
+      - name: 📁 Prepare Workspace
+        id: prepare_workspace
         run: |
-          echo "🖼️ Using default Flutter icon"
-          echo "icon_status=default" >> $GITHUB_OUTPUT
+          echo "📁 Preparing workspace..."
+          
+          # Create workspace directories
+          mkdir -p $GITHUB_WORKSPACE/workspace
+          mkdir -p $GITHUB_WORKSPACE/output
+          mkdir -p $GITHUB_WORKSPACE/temp
+          
+          # Set permissions
+          chmod -R 755 $GITHUB_WORKSPACE/workspace
+          chmod -R 755 $GITHUB_WORKSPACE/output
+          chmod -R 755 $GITHUB_WORKSPACE/temp
+          
+          echo "✅ Workspace prepared"
+          echo "workspace_dir=$GITHUB_WORKSPACE/workspace" >> $GITHUB_OUTPUT
+          echo "output_dir=$GITHUB_WORKSPACE/output" >> $GITHUB_OUTPUT
 
       # ============================================================
       # BUILD FROM URL
@@ -189,30 +255,55 @@ jobs:
           APP_VERSION: ${{ inputs.app_version }}
           BUILD_NUMBER: ${{ inputs.build_number }}
           SPLASH_ENABLED: ${{ inputs.splash_screen }}
+          WORKSPACE_DIR: ${{ steps.prepare_workspace.outputs.workspace_dir }}
+          OUTPUT_DIR: ${{ steps.prepare_workspace.outputs.output_dir }}
         run: |
           set -e
-
+          
           echo "🚀 Building from URL: $APP_URL"
           echo "📱 App Name: $APP_NAME"
           echo "📦 Package: $PACKAGE_NAME"
           echo "📌 Version: $APP_VERSION ($BUILD_NUMBER)"
-
+          
+          cd $WORKSPACE_DIR
+          
           # Escape special characters
           ESC_APP_NAME=$(printf '%s' "$APP_NAME" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
           ESC_APP_URL=$(printf '%s' "$APP_URL" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
           ESC_PACKAGE_NAME=$(printf '%s' "$PACKAGE_NAME" | sed -e 's/[\/&]/\\&/g' -e 's/"/\\"/g')
-
+          
           # Create Flutter project
           flutter create --org com.web2apk --project-name myapp myapp
           cd myapp
-
+          
           # Copy custom icon if exists
-          if [ -d "../android/app/src/main/res" ] && [ "$(ls -A ../android/app/src/main/res)" ]; then
-            cp -r ../android/app/src/main/res/* android/app/src/main/res/ 2>/dev/null || true
-            echo "✅ Custom icons copied"
+          if [ "${{ steps.process_icon.outputs.icon_status }}" = "custom" ]; then
+            mkdir -p android/app/src/main/res/mipmap-hdpi
+            mkdir -p android/app/src/main/res/mipmap-mdpi
+            mkdir -p android/app/src/main/res/mipmap-xhdpi
+            mkdir -p android/app/src/main/res/mipmap-xxhdpi
+            mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+            mkdir -p android/app/src/main/res/drawable
+            mkdir -p android/app/src/main/res/drawable-v21
+            
+            # Use the validated icon
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+            
+            # Create round icons
+            cp android/app/src/main/res/mipmap-mdpi/ic_launcher.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-hdpi/ic_launcher.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-xhdpi/ic_launcher.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+            
+            echo "✅ Custom icons applied"
           fi
-
-          # Update pubspec.yaml
+          
+          # Create pubspec.yaml
           cat > pubspec.yaml << 'EOF'
           name: myapp
           description: WebView App
@@ -229,7 +320,6 @@ jobs:
             webview_flutter_android: ^3.12.0
             webview_flutter_wkwebview: ^3.9.0
             connectivity_plus: ^6.0.0
-            flutter_native_splash: ^2.4.0
 
           dev_dependencies:
             flutter_test:
@@ -239,17 +329,11 @@ jobs:
           flutter:
             uses-material-design: true
           EOF
-
-          # Replace version placeholders
+          
+          # Replace version
           sed -i "s/APP_VERSION/${APP_VERSION}/g" pubspec.yaml
           sed -i "s/BUILD_NUMBER/${BUILD_NUMBER}/g" pubspec.yaml
-
-          # Setup splash screen if enabled
-          if [ "$SPLASH_ENABLED" = "true" ]; then
-            flutter pub get
-            flutter pub run flutter_native_splash:create
-          fi
-
+          
           # Create main.dart
           cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
@@ -335,9 +419,6 @@ jobs:
                         hasError = true;
                         errorMessage = error.description;
                       });
-                    },
-                    onProgress: (int progress) {
-                      // Update progress if needed
                     },
                   ),
                 )
@@ -471,12 +552,12 @@ jobs:
             }
           }
           EOF
-
+          
           # Replace placeholders
           sed -i "s/__APP_NAME__/${ESC_APP_NAME}/g" lib/main.dart
           sed -i "s#__APP_URL__#${ESC_APP_URL}#g" lib/main.dart
-
-          # Create Android Manifest
+          
+          # Update AndroidManifest
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:tools="http://schemas.android.com/tools"
@@ -516,30 +597,30 @@ jobs:
               </application>
           </manifest>
           EOF
-
+          
           # Replace placeholders
           sed -i "s/__PACKAGE_NAME__/${ESC_PACKAGE_NAME}/g" android/app/src/main/AndroidManifest.xml
           sed -i "s/__APP_NAME__/${ESC_APP_NAME}/g" android/app/src/main/AndroidManifest.xml
-
+          
           # Update build.gradle
           sed -i "s/applicationId \".*\"/applicationId \"${ESC_PACKAGE_NAME}\"/g" android/app/build.gradle
           sed -i "s/minSdkVersion .*/minSdkVersion ${MIN_SDK_VERSION}/g" android/app/build.gradle
           sed -i "s/targetSdkVersion .*/targetSdkVersion ${ANDROID_SDK_VERSION}/g" android/app/build.gradle
           sed -i "s/versionCode .*/versionCode ${BUILD_NUMBER}/g" android/app/build.gradle
           sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/g" android/app/build.gradle
-
-          # Add internet permission to build.gradle if needed
-          echo '✅ Project configured'
-
-          # Get dependencies and build
+          
+          # Build
           flutter pub get
           flutter clean
+          flutter build apk --release
           
-          # Build the APK
-          flutter build apk --release --split-per-abi
+          # Copy APK to output
+          cp build/app/outputs/flutter-apk/app-release.apk $OUTPUT_DIR/app-release.apk
           
           echo "✅ Build completed successfully"
-          cd ../..
+          echo "apk_path=$OUTPUT_DIR/app-release.apk" >> $GITHUB_OUTPUT
+          
+          cd $GITHUB_WORKSPACE
 
       # ============================================================
       # BUILD FROM ZIP
@@ -553,55 +634,80 @@ jobs:
           PACKAGE_NAME: ${{ inputs.package_name }}
           APP_VERSION: ${{ inputs.app_version }}
           BUILD_NUMBER: ${{ inputs.build_number }}
+          WORKSPACE_DIR: ${{ steps.prepare_workspace.outputs.workspace_dir }}
+          OUTPUT_DIR: ${{ steps.prepare_workspace.outputs.output_dir }}
         run: |
           set -e
-
+          
           echo "📦 Building from ZIP..."
           echo "📱 App Name: $APP_NAME"
           echo "📦 Package: $PACKAGE_NAME"
           
-          mkdir -p workspace
-          cd workspace
-
+          cd $WORKSPACE_DIR
+          
           echo "⬇️ Downloading ZIP..."
           wget -q --show-progress -O project.zip "$ZIP_URL"
-
+          
           if [ ! -f project.zip ]; then
             echo "❌ Failed to download ZIP"
             exit 1
           fi
-
+          
           echo "📂 Extracting..."
           mkdir -p project
           unzip -q -o project.zip -d project/
-
+          
           # Find pubspec.yaml
           PUBSPEC_PATH=$(find project -maxdepth 4 -name "pubspec.yaml" | head -n 1)
           if [ -z "$PUBSPEC_PATH" ]; then
             echo "❌ pubspec.yaml not found!"
-            ls -la project/
             exit 1
           fi
-
+          
           PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
           echo "📂 Project found: $PROJECT_DIR"
-
+          
           cd "$PROJECT_DIR"
-
+          
           # Clean previous builds
           rm -rf build/ .dart_tool/ pubspec.lock
-
+          
           # Add webview_flutter if missing
           if ! grep -q "webview_flutter:" pubspec.yaml; then
             echo "📝 Adding webview_flutter dependencies..."
             sed -i '/dependencies:/a\  webview_flutter: ^4.7.0\n  webview_flutter_android: ^3.12.0\n  webview_flutter_wkwebview: ^3.9.0\n  connectivity_plus: ^6.0.0' pubspec.yaml
           fi
-
+          
           # Update version
           if grep -q "version:" pubspec.yaml; then
             sed -i "s/version:.*/version: ${APP_VERSION}+${BUILD_NUMBER}/" pubspec.yaml
           fi
-
+          
+          # Copy custom icon if exists
+          if [ "${{ steps.process_icon.outputs.icon_status }}" = "custom" ]; then
+            mkdir -p android/app/src/main/res/mipmap-hdpi
+            mkdir -p android/app/src/main/res/mipmap-mdpi
+            mkdir -p android/app/src/main/res/mipmap-xhdpi
+            mkdir -p android/app/src/main/res/mipmap-xxhdpi
+            mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+            mkdir -p android/app/src/main/res/drawable
+            mkdir -p android/app/src/main/res/drawable-v21
+            
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+            cp $GITHUB_WORKSPACE/icons/icon_raw.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+            
+            cp android/app/src/main/res/mipmap-mdpi/ic_launcher.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-hdpi/ic_launcher.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-xhdpi/ic_launcher.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+            
+            echo "✅ Custom icons applied"
+          fi
+          
           # Update build.gradle
           if [ -f "android/app/build.gradle" ]; then
             echo "📝 Updating build.gradle..."
@@ -611,35 +717,31 @@ jobs:
             sed -i "s/versionCode .*/versionCode ${BUILD_NUMBER}/g" android/app/build.gradle
             sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/g" android/app/build.gradle
           fi
-
+          
           # Update AndroidManifest
           if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
             echo "📝 Updating AndroidManifest..."
             sed -i "s/package=\".*\"/package=\"${PACKAGE_NAME}\"/g" android/app/src/main/AndroidManifest.xml
             sed -i "s/android:label=\".*\"/android:label=\"${APP_NAME}\"/g" android/app/src/main/AndroidManifest.xml
             
-            # Add internet permission if missing
+            # Add permissions if missing
             if ! grep -q "INTERNET" android/app/src/main/AndroidManifest.xml; then
               sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' android/app/src/main/AndroidManifest.xml
             fi
           fi
-
-          # Copy custom icon if exists
-          if [ -d "../../android/app/src/main/res" ] && [ "$(ls -A ../../android/app/src/main/res 2>/dev/null)" ]; then
-            echo "🎨 Copying custom icons..."
-            mkdir -p android/app/src/main/res
-            cp -r ../../android/app/src/main/res/* android/app/src/main/res/ 2>/dev/null || true
-          fi
-
-          # Get dependencies and build
+          
+          # Build
           flutter pub get
           flutter clean
+          flutter build apk --release
           
-          # Build the APK
-          flutter build apk --release --split-per-abi
+          # Copy APK to output
+          cp build/app/outputs/flutter-apk/app-release.apk $OUTPUT_DIR/app-release.apk
           
           echo "✅ Build completed successfully"
-          cd ../../..
+          echo "apk_path=$OUTPUT_DIR/app-release.apk" >> $GITHUB_OUTPUT
+          
+          cd $GITHUB_WORKSPACE
 
       # ============================================================
       # LOCATE & UPLOAD APK
@@ -650,47 +752,37 @@ jobs:
         run: |
           echo "🔍 Searching for APK..."
           
-          # Search in various locations
-          APK_PATH=$(find . -type f -name "app-release.apk" -path "*/build/app/outputs/flutter-apk/*" 2>/dev/null | head -n 1)
-          
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find . -type f -name "*.apk" -path "*/build/app/outputs/flutter-apk/*" 2>/dev/null | head -n 1)
+          # Check output directory first
+          if [ -f "${{ steps.prepare_workspace.outputs.output_dir }}/app-release.apk" ]; then
+            APK_PATH="${{ steps.prepare_workspace.outputs.output_dir }}/app-release.apk"
+          else
+            # Search in workspace
+            APK_PATH=$(find $GITHUB_WORKSPACE -type f -name "app-release.apk" 2>/dev/null | head -n 1)
           fi
           
           if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find . -type f -name "*.apk" 2>/dev/null | grep -v ".gradle" | head -n 1)
+            APK_PATH=$(find $GITHUB_WORKSPACE -type f -name "*.apk" 2>/dev/null | grep -v ".gradle" | head -n 1)
           fi
           
           if [ -z "$APK_PATH" ]; then
             echo "❌ No APK found!"
-            find . -name "*.apk" 2>/dev/null
+            echo "Files found:"
+            find $GITHUB_WORKSPACE -name "*.apk" 2>/dev/null
             exit 1
           fi
           
           echo "✅ APK found at: $APK_PATH"
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-          
-          # Show file info
           ls -lh "$APK_PATH"
-          file "$APK_PATH"
 
       - name: 📤 Upload APK Artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.app_name }}-${{ inputs.package_name }}-${{ inputs.job_id }}
+          name: ${{ inputs.app_name }}-${{ inputs.job_id || 'build' }}
           path: ${{ steps.locate_apk.outputs.apk_path }}
           retention-days: 7
           compression-level: 6
-
-      - name: 📤 Upload APK to Release
-        if: success()
-        id: upload_release
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-builds
-          path: ${{ steps.locate_apk.outputs.apk_path }}
-          retention-days: 30
 
       - name: 📊 Get APK Info
         if: success()
@@ -706,9 +798,9 @@ jobs:
           echo "🔑 MD5: $APK_MD5"
 
       # ============================================================
-      # SEND TO TELEGRAM
+      # TELEGRAM NOTIFICATIONS
       # ============================================================
-      - name: 📨 Send Success to Telegram
+      - name: 📨 Send Success Notification
         if: success()
         uses: appleboy/telegram-action@v1.1.0
         with:
@@ -720,22 +812,20 @@ jobs:
             📱 *Nama:* ${{ inputs.app_name }}
             📦 *Package:* ${{ inputs.package_name }}
             📌 *Version:* ${{ inputs.app_version }} (Build ${{ inputs.build_number }})
-            🎨 *Icon:* ${{ steps.process_icon.outputs.icon_status || steps.default_icon.outputs.icon_status || 'default' }}
+            🎨 *Icon:* ${{ steps.process_icon.outputs.icon_status || 'default' }}
             🆔 *Job ID:* ${{ inputs.job_id || 'N/A' }}
             📊 *Size:* ${{ steps.apk_info.outputs.apk_size || 'Unknown' }}
-            🔑 *MD5:* ${{ steps.apk_info.outputs.apk_md5 || 'Unknown' }}
             
-            🚀 *Download:* [Click here to download](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            
+            🚀 *Download:* GitHub Actions
             ⏱️ *Date:* $(date '+%Y-%m-%d %H:%M:%S %Z')
           document: ${{ steps.locate_apk.outputs.apk_path }}
-          file_name: ${{ inputs.app_name }}-${{ inputs.package_name }}-${{ inputs.job_id }}.apk
+          file_name: ${{ inputs.app_name }}-${{ inputs.job_id || 'build' }}.apk
 
-      - name: 📨 Send Failure to Admin
+      - name: 📨 Send Failure Notification
         if: failure()
         uses: appleboy/telegram-action@v1.1.0
         with:
-          to: ${{ secrets.ADMIN_CHAT_ID }}
+          to: ${{ secrets.ADMIN_CHAT_ID || inputs.user_id }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             ❌ *BUILD GAGAL!*
@@ -747,64 +837,12 @@ jobs:
             🆔 *Job ID:* ${{ inputs.job_id || 'N/A' }}
             
             🔗 *Details:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            
             ⏱️ *Date:* $(date '+%Y-%m-%d %H:%M:%S %Z')
-
-      - name: 📨 Send User Failure
-        if: failure() && inputs.user_id != ''
-        uses: appleboy/telegram-action@v1.1.0
-        with:
-          to: ${{ inputs.user_id }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            ❌ *Build Gagal!*
-            
-            Mohon maaf, build aplikasi Anda gagal.
-            
-            📱 Nama: ${{ inputs.app_name }}
-            🆔 Job: ${{ inputs.job_id || 'N/A' }}
-            
-            Silakan periksa kembali URL atau file ZIP Anda dan coba lagi.
-            
-            Jika masalah berlanjut, hubungi admin.
-
-      - name: 📋 Generate Build Report
-        if: always()
-        run: |
-          cat << EOF > build-report.txt
-          ============================================
-              BUILD REPORT - Web2APK Builder
-          ============================================
-          
-          📱 App Name        : ${{ inputs.app_name }}
-          📦 Package Name    : ${{ inputs.package_name }}
-          📌 Version         : ${{ inputs.app_version }} (Build ${{ inputs.build_number }})
-          🎨 Icon Status     : ${{ steps.process_icon.outputs.icon_status || 'default' }}
-          🆔 Job ID          : ${{ inputs.job_id || 'N/A' }}
-          👤 User ID         : ${{ inputs.user_id }}
-          🌐 Build Type      : ${{ inputs.url != '' && 'URL' || 'ZIP' }}
-          
-          📊 Build Status    : ${{ job.status }}
-          🔗 Workflow URL    : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          
-          ⏱️ Build Time       : $(date '+%Y-%m-%d %H:%M:%S %Z')
-          ============================================
-          EOF
-          
-          echo "📋 Build report generated"
-
-      - name: 📤 Upload Build Report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-report
-          path: build-report.txt
-          retention-days: 7
 
       - name: 🧹 Cleanup
         if: always()
         run: |
           echo "🧹 Cleaning up workspace..."
-          rm -rf workspace 2>/dev/null || true
-          rm -rf temp_icons 2>/dev/null || true
+          rm -rf $GITHUB_WORKSPACE/workspace 2>/dev/null || true
+          rm -rf $GITHUB_WORKSPACE/temp 2>/dev/null || true
           echo "✅ Cleanup completed"
