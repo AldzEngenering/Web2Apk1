@@ -1,12 +1,8 @@
-name: Web2APK Builder
+name: Build APK
 
 on:
   workflow_dispatch:
     inputs:
-      url:
-        description: 'Website URL'
-        required: false
-        type: string
       app_name:
         description: 'Nama Aplikasi'
         required: true
@@ -15,332 +11,168 @@ on:
         description: 'Package Name'
         required: true
         type: string
-      user_id:
-        description: 'Telegram User ID'
-        required: true
+      url:
+        description: 'Website URL'
+        required: false
         type: string
       zip_url:
-        description: 'URL ZIP Flutter Project'
+        description: 'ZIP URL (Flutter Project)'
         required: false
         type: string
-      job_id:
-        description: 'Job ID'
+      user_id:
+        description: 'User ID'
+        required: true
+        type: string
+      build_mode:
+        description: 'Build Mode (debug/release)'
+        required: false
+        default: 'release'
+        type: string
+      icon_url:
+        description: 'Icon URL'
         required: false
         type: string
-      icon_data:
-        description: 'Base64 Icon Data'
-        required: false
-        type: string
-
-permissions:
-  contents: read
-  actions: write
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 40
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     
-    defaults:
-      run:
-        shell: bash
-
     steps:
-      - name: 📥 Checkout
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: ☕ Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'  # Changed from 'temurin' to 'zulu' (more compatible)
-          java-version: '17'     # Direct version instead of env variable
-          cache: 'gradle'
-
-      - name: 📱 Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-          accept-android-sdk-licenses: true
-
-      - name: 🐦 Setup Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.4'
+          flutter-version: '3.16.0'
           channel: 'stable'
-          cache: true
 
-      - name: 📦 Install Dependencies
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Create Flutter Project
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl wget unzip git
+          flutter create --org $(echo "${{ inputs.package_name }}" | cut -d. -f1,2) \
+            --project-name $(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]') \
+            app
+          cd app
+          
+          # Update package name
+          sed -i "s/com.example.app/${{ inputs.package_name }}/g" android/app/build.gradle
+          sed -i "s/com.example.app/${{ inputs.package_name }}/g" android/app/src/main/AndroidManifest.xml
+          sed -i "s/package=\"com.example.app\"/package=\"${{ inputs.package_name }}\"/g" android/app/src/main/AndroidManifest.xml
+          
+          # Update app name
+          sed -i "s/MyApp/${{ inputs.app_name }}/g" android/app/src/main/AndroidManifest.xml
 
-      - name: ✅ Validate Inputs
-        id: validate
+      - name: Download Website (if URL provided)
+        if: inputs.url != ''
         run: |
-          if [ -z "${{ inputs.app_name }}" ]; then
-            echo "❌ app_name is required"
-            exit 1
-          fi
-          if [ -z "${{ inputs.package_name }}" ]; then
-            echo "❌ package_name is required"
-            exit 1
-          fi
-          if [ -z "${{ inputs.user_id }}" ]; then
-            echo "❌ user_id is required"
-            exit 1
-          fi
-          if [ -z "${{ inputs.url }}" ] && [ -z "${{ inputs.zip_url }}" ]; then
-            echo "❌ URL or ZIP URL required"
-            exit 1
-          fi
-          echo "✅ All inputs valid"
-
-      - name: 🎨 Process Icon
-        id: icon
-        if: ${{ inputs.icon_data != '' }}
-        run: |
-          echo "${{ inputs.icon_data }}" | base64 -d > icon.png 2>/dev/null || echo "No icon"
-          if [ -f icon.png ] && [ -s icon.png ]; then
-            echo "icon_available=true" >> $GITHUB_OUTPUT
-            echo "✅ Icon processed"
-          else
-            echo "icon_available=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Using default icon"
-          fi
-
-      - name: 🏗️ Build from URL
-        if: ${{ inputs.url != '' && inputs.url != 'null' }}
-        run: |
-          APP_NAME="${{ inputs.app_name }}"
-          APP_URL="${{ inputs.url }}"
-          PACKAGE_NAME="${{ inputs.package_name }}"
-          
-          echo "Building: $APP_NAME"
-          
-          flutter create --org com.web2apk --project-name webapp webapp
-          cd webapp
-          
-          cat > pubspec.yaml << 'EOF'
-          name: webapp
-          description: WebView App
-          publish_to: 'none'
-          version: 1.0.0+1
-
-          environment:
-            sdk: '>=3.0.0 <4.0.0'
-
-          dependencies:
-            flutter:
-              sdk: flutter
-            webview_flutter: ^4.7.0
-
-          dev_dependencies:
-            flutter_test:
-              sdk: flutter
-            flutter_lints: ^3.0.0
-
-          flutter:
-            uses-material-design: true
-          EOF
-          
-          cat > lib/main.dart << 'EOF'
+          cd app/lib
+          # Download website content
+          curl -L "${{ inputs.url }}" -o index.html
+          # Create main.dart with webview
+          cat > main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
-
+          
           void main() => runApp(const MyApp());
-
+          
           class MyApp extends StatelessWidget {
             const MyApp({super.key});
-
+            
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: 'APP_NAME',
-                theme: ThemeData.dark(),
-                home: const WebViewPage(),
+                title: '${{ inputs.app_name }}',
+                theme: ThemeData(primarySwatch: Colors.blue),
+                home: const WebViewScreen(),
                 debugShowCheckedModeBanner: false,
               );
             }
           }
-
-          class WebViewPage extends StatefulWidget {
-            const WebViewPage({super.key});
-
+          
+          class WebViewScreen extends StatefulWidget {
+            const WebViewScreen({super.key});
+            
             @override
-            State<WebViewPage> createState() => _WebViewPageState();
+            State<WebViewScreen> createState() => _WebViewScreenState();
           }
-
-          class _WebViewPageState extends State<WebViewPage> {
+          
+          class _WebViewScreenState extends State<WebViewScreen> {
             late final WebViewController controller;
-            bool loading = true;
-
+            
             @override
             void initState() {
               super.initState();
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..setNavigationDelegate(
-                  NavigationDelegate(
-                    onPageStarted: (_) => setState(() => loading = true),
-                    onPageFinished: (_) => setState(() => loading = false),
-                  ),
-                )
-                ..loadRequest(Uri.parse('APP_URL'));
+                ..loadRequest(Uri.parse('${{ inputs.url }}'));
             }
-
+            
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                body: Stack(
-                  children: [
-                    WebViewWidget(controller: controller),
-                    if (loading)
-                      const Center(child: CircularProgressIndicator()),
-                  ],
+                appBar: AppBar(
+                  title: Text('${{ inputs.app_name }}'),
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
                 ),
+                body: WebViewWidget(controller: controller),
               );
             }
           }
           EOF
           
-          sed -i "s/APP_NAME/${APP_NAME}/g" lib/main.dart
-          sed -i "s#APP_URL#${APP_URL}#g" lib/main.dart
-          
-          sed -i "s/package=\".*\"/package=\"${PACKAGE_NAME}\"/" android/app/src/main/AndroidManifest.xml
-          sed -i "s/android:label=\".*\"/android:label=\"${APP_NAME}\"/" android/app/src/main/AndroidManifest.xml
-          
-          if ! grep -q "INTERNET" android/app/src/main/AndroidManifest.xml; then
-            sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
-          fi
-          
-          sed -i "s/applicationId \".*\"/applicationId \"${PACKAGE_NAME}\"/" android/app/build.gradle
-          sed -i "s/minSdkVersion .*/minSdkVersion 21/" android/app/build.gradle
-          sed -i "s/targetSdkVersion .*/targetSdkVersion 34/" android/app/build.gradle
-          
-          if [ "${{ steps.icon.outputs.icon_available }}" = "true" ]; then
-            mkdir -p android/app/src/main/res/mipmap-hdpi
-            mkdir -p android/app/src/main/res/mipmap-mdpi
-            mkdir -p android/app/src/main/res/mipmap-xhdpi
-            mkdir -p android/app/src/main/res/mipmap-xxhdpi
-            mkdir -p android/app/src/main/res/mipmap-xxxhdpi
-            cp ../icon.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
-            cp ../icon.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
-            cp ../icon.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
-            cp ../icon.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-            cp ../icon.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          fi
-          
-          flutter pub get
-          flutter build apk --release
+          # Update pubspec.yaml
           cd ..
+          echo "  webview_flutter: ^4.4.2" >> pubspec.yaml
 
-      - name: 📦 Build from ZIP
-        if: ${{ inputs.zip_url != '' && inputs.zip_url != 'null' }}
+      - name: Download ZIP (if ZIP URL provided)
+        if: inputs.zip_url != ''
         run: |
-          APP_NAME="${{ inputs.app_name }}"
-          PACKAGE_NAME="${{ inputs.package_name }}"
-          ZIP_URL="${{ inputs.zip_url }}"
-          
-          wget -O project.zip "$ZIP_URL"
-          mkdir -p project
-          unzip -q project.zip -d project/
-          
-          PROJECT_DIR=$(find project -name "pubspec.yaml" -exec dirname {} \; | head -1)
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "❌ No Flutter project found"
-            exit 1
-          fi
-          
-          cd "$PROJECT_DIR"
-          rm -rf build .dart_tool
-          
-          if ! grep -q "webview_flutter:" pubspec.yaml; then
-            sed -i '/dependencies:/a\  webview_flutter: ^4.7.0' pubspec.yaml
-          fi
-          
-          if [ -f "android/app/build.gradle" ]; then
-            sed -i "s/applicationId \".*\"/applicationId \"${PACKAGE_NAME}\"/" android/app/build.gradle
-          fi
-          
-          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
-            sed -i "s/package=\".*\"/package=\"${PACKAGE_NAME}\"/" android/app/src/main/AndroidManifest.xml
-            sed -i "s/android:label=\".*\"/android:label=\"${APP_NAME}\"/" android/app/src/main/AndroidManifest.xml
-          fi
-          
-          if [ "${{ steps.icon.outputs.icon_available }}" = "true" ]; then
-            mkdir -p android/app/src/main/res/mipmap-hdpi
-            mkdir -p android/app/src/main/res/mipmap-mdpi
-            mkdir -p android/app/src/main/res/mipmap-xhdpi
-            mkdir -p android/app/src/main/res/mipmap-xxhdpi
-            mkdir -p android/app/src/main/res/mipmap-xxxhdpi
-            cp ../../icon.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png 2>/dev/null || true
-            cp ../../icon.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png 2>/dev/null || true
-            cp ../../icon.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png 2>/dev/null || true
-            cp ../../icon.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png 2>/dev/null || true
-            cp ../../icon.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png 2>/dev/null || true
-          fi
-          
-          flutter pub get
-          flutter build apk --release
-          cd ../..
+          curl -L "${{ inputs.zip_url }}" -o project.zip
+          unzip -o project.zip -d temp_project
+          # Copy files to app folder
+          cp -r temp_project/* app/ || true
+          cp -r temp_project/.??* app/ || true
 
-      - name: 🔍 Find APK
-        id: find_apk
-        if: success()
+      - name: Download Icon (if URL provided)
+        if: inputs.icon_url != ''
         run: |
-          APK=$(find . -name "app-release.apk" -path "*/build/app/outputs/flutter-apk/*" 2>/dev/null | head -1)
-          if [ -z "$APK" ]; then
-            APK=$(find . -name "*.apk" -path "*/build/app/outputs/*" 2>/dev/null | head -1)
-          fi
-          if [ -z "$APK" ]; then
-            echo "❌ APK not found!"
-            exit 1
-          fi
-          echo "apk_path=$APK" >> $GITHUB_OUTPUT
-          echo "✅ APK: $APK"
+          cd app/android/app/src/main/res
+          mkdir -p mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi
+          curl -L "${{ inputs.icon_url }}" -o icon.png
+          
+          # Resize icons
+          convert icon.png -resize 72x72 mipmap-hdpi/ic_launcher.png
+          convert icon.png -resize 48x48 mipmap-mdpi/ic_launcher.png
+          convert icon.png -resize 96x96 mipmap-xhdpi/ic_launcher.png
+          convert icon.png -resize 144x144 mipmap-xxhdpi/ic_launcher.png
+          convert icon.png -resize 192x192 mipmap-xxxhdpi/ic_launcher.png
 
-      - name: 📤 Upload APK
-        if: success()
+      - name: Add Dependencies
+        run: |
+          cd app
+          flutter pub add webview_flutter
+          flutter pub add http
+
+      - name: Build APK
+        run: |
+          cd app
+          if [ "${{ inputs.build_mode }}" = "debug" ]; then
+            flutter build apk --debug
+          else
+            flutter build apk --release
+          fi
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.app_name }}-${{ inputs.job_id || 'build' }}
-          path: ${{ steps.find_apk.outputs.apk_path }}
+          name: apk-builds
+          path: app/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
-
-      - name: 📊 APK Info
-        id: apk_info
-        if: success()
-        run: |
-          APK="${{ steps.find_apk.outputs.apk_path }}"
-          SIZE=$(du -h "$APK" | cut -f1)
-          echo "size=$SIZE" >> $GITHUB_OUTPUT
-
-      - name: 📨 Send Success
-        if: success()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ inputs.user_id }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            ✅ *BUILD BERHASIL!*
-            
-            📱 Nama: ${{ inputs.app_name }}
-            📦 Package: ${{ inputs.package_name }}
-            📊 Size: ${{ steps.apk_info.outputs.size }}
-            🆔 Job: ${{ inputs.job_id || 'N/A' }}
-          document: ${{ steps.find_apk.outputs.apk_path }}
-
-      - name: 📨 Send Failure
-        if: failure()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.ADMIN_CHAT_ID || inputs.user_id }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            ❌ *BUILD GAGAL!*
-            
-            📱 Nama: ${{ inputs.app_name }}
-            👤 User: ${{ inputs.user_id }}
-            🆔 Job: ${{ inputs.job_id || 'N/A' }}
-            
-            🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
