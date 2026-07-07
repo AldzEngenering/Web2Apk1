@@ -73,7 +73,6 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: ${{ env.JAVA_VERSION }}
-          # Tanpa cache karena Gradle file dibuat dinamis
 
       # ═══════════════════════════════════════════════════════════════════
       # 4. SETUP ANDROID SDK
@@ -140,9 +139,8 @@ jobs:
           cd webapp
           
           echo "📦 Installing dependencies..."
-          flutter pub add webview_flutter
-          flutter pub add webview_flutter_plus
-          flutter pub add flutter_native_splash
+          # Gunakan versi webview_flutter yang kompatibel
+          flutter pub add webview_flutter:^4.4.2
           flutter pub add flutter_launcher_icons
           
           echo "✅ Project created"
@@ -175,7 +173,6 @@ jobs:
             echo "⚠️ Downloaded file is not a valid image!"
             echo "📋 Creating fallback icon..."
             
-            # Create fallback icon with ImageMagick
             convert -size 512x512 xc:blue \
               -font Helvetica -pointsize 100 -fill white \
               -gravity center -annotate +0+0 "APP" \
@@ -186,19 +183,15 @@ jobs:
               cp webapp/assets/icon_raw.png webapp/assets/icon.png
           fi
           
-          # Ensure icon exists
           if [ ! -f webapp/assets/icon.png ]; then
             echo "❌ Failed to create icon!"
             exit 1
           fi
           
-          # Create splash from icon
-          cp webapp/assets/icon.png webapp/assets/splash.png
-          
           echo "✅ Icon ready"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 8. GENERATE MAIN.DART (TANPA SPLASH)
+      # 8. GENERATE MAIN.DART (SEDERHANA)
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Generate main.dart
         run: |
@@ -245,16 +238,6 @@ jobs:
               _controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
                 ..setBackgroundColor(const Color(0x00000000))
-                ..setNavigationDelegate(
-                  NavigationDelegate(
-                    onPageFinished: (String url) {
-                      // Page loaded
-                    },
-                    onWebResourceError: (WebResourceError error) {
-                      // Handle error
-                    },
-                  ),
-                )
                 ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
             }
 
@@ -283,7 +266,7 @@ jobs:
           echo "✅ main.dart generated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 9. GENERATE ICON CONFIG (TANPA SPLASH)
+      # 9. GENERATE ICON CONFIG
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Generate Icon Config
         run: |
@@ -315,23 +298,19 @@ jobs:
           PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]/_/g' | sed 's/_\+/_/g' | sed 's/^_//;s/_$//')
           sed -i "s/^name:.*/name: $PACKAGE_NAME/g" pubspec.yaml
           
-          # Remove splash dependencies from pubspec
-          sed -i '/flutter_native_splash/d' pubspec.yaml
+          # Tambahkan konfigurasi minimum untuk webview
+          cat >> pubspec.yaml << 'EOF'
           
-          if ! grep -q "^flutter:" pubspec.yaml; then
-            cat >> pubspec.yaml << 'EOF'
-            
           flutter:
             uses-material-design: true
             assets:
               - assets/icon.png
           EOF
-          fi
           
           echo "✅ pubspec.yaml updated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 11. FIX GRADLE PROJECT (SEDERHANA)
+      # 11. FIX GRADLE PROJECT (LENGKAP)
       # ═══════════════════════════════════════════════════════════════════
       - name: 🔧 Fix Gradle Project
         working-directory: ./webapp
@@ -340,6 +319,7 @@ jobs:
           
           mkdir -p android/gradle/wrapper
           mkdir -p android/app/src/main
+          mkdir -p android/app/src/main/res/values
           
           # gradle-wrapper.properties
           cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
@@ -409,7 +389,7 @@ jobs:
           
           android {
               namespace 'com.example.webapp'
-              compileSdkVersion 34
+              compileSdk 34
               ndkVersion flutter.ndkVersion
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -429,10 +409,6 @@ jobs:
                       signingConfig signingConfigs.debug
                       minifyEnabled true
                       proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-                  }
-                  debug {
-                      signingConfig signingConfigs.debug
-                      minifyEnabled false
                   }
               }
           }
@@ -458,23 +434,45 @@ jobs:
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.example.webapp">
-              <application android:label="webapp" android:icon="@mipmap/ic_launcher">
-                  <activity android:name=".MainActivity" android:exported="true"
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application
+                  android:label="webapp"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
                       android:launchMode="singleTop"
                       android:theme="@style/LaunchTheme"
                       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
                       android:hardwareAccelerated="true"
                       android:windowSoftInputMode="adjustResize">
-                      <meta-data android:name="io.flutter.embedding.android.NormalTheme"
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
                           android:resource="@style/NormalTheme"/>
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
-                  <meta-data android:name="flutterEmbedding" android:value="2" />
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
               </application>
           </manifest>
+          EOF
+          
+          # styles.xml
+          cat > android/app/src/main/res/values/styles.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+                  <item name="android:windowBackground">@android:color/white</item>
+              </style>
+              <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+                  <item name="android:windowBackground">?android:colorBackground</item>
+              </style>
+          </resources>
           EOF
           
           echo "✅ Gradle project fixed!"
@@ -511,7 +509,7 @@ jobs:
           echo "✅ Dependencies installed"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 13. GENERATE ICON ONLY
+      # 13. GENERATE ICON
       # ═══════════════════════════════════════════════════════════════════
       - name: 🖼️ Generate Icon
         working-directory: ./webapp
@@ -528,13 +526,21 @@ jobs:
         run: |
           echo "🔨 Building APK..."
           
-          # Try normal build
-          if ! flutter build apk --release --split-per-abi; then
-            echo "⚠️ Build failed, trying with --no-shuffle..."
-            if ! flutter build apk --release --split-per-abi --no-shuffle; then
-              echo "❌ All build attempts failed!"
-              exit 1
+          # Try with debug first
+          if flutter build apk --debug; then
+            echo "✅ Debug build succeeded!"
+            
+            # Then try release
+            if ! flutter build apk --release --split-per-abi; then
+              echo "⚠️ Release build failed, trying without split..."
+              if ! flutter build apk --release; then
+                echo "❌ All build attempts failed!"
+                exit 1
+              fi
             fi
+          else
+            echo "❌ Debug build failed!"
+            exit 1
           fi
           
           echo "✅ Build completed successfully!"
