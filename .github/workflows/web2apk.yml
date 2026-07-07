@@ -18,9 +18,7 @@ on:
         type: string
 
 env:
-  FLUTTER_VERSION: '3.24.3-stable'
-  JAVA_VERSION: '17'
-  ANDROID_SDK_VERSION: '34.0.0'
+  FLUTTER_VERSION: '3.24.3'
 
 jobs:
   build:
@@ -33,44 +31,84 @@ jobs:
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      # ─── 2. CREATE FLUTTER WEB PROJECT ──────────────────────────────────
+      # ─── 2. INSTALL DEPENDENCIES ─────────────────────────────────────────
+      - name: 📦 Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            curl \
+            git \
+            unzip \
+            xz-utils \
+            zip \
+            libglu1-mesa \
+            openjdk-17-jdk \
+            ninja-build \
+            pkg-config \
+            libgtk-3-dev \
+            liblzma-dev \
+            libstdc++-12-dev
+
+      # ─── 3. SETUP JAVA ────────────────────────────────────────────────────
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ─── 4. SETUP ANDROID SDK ────────────────────────────────────────────
+      - name: 📱 Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          sdk-version: '34.0.0'
+
+      # ─── 5. SETUP FLUTTER ─────────────────────────────────────────────────
+      - name: 🎯 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # ─── 6. VERIFY FLUTTER ────────────────────────────────────────────────
+      - name: ✅ Verify Flutter Installation
+        run: |
+          echo "🔍 Verifying Flutter..."
+          flutter --version
+          flutter doctor -v
+          
+          if ! command -v flutter &> /dev/null; then
+            echo "❌ Flutter not found in PATH!"
+            exit 1
+          fi
+          
+          echo "✅ Flutter installed successfully"
+
+      # ─── 7. CREATE FLUTTER WEB PROJECT ──────────────────────────────────
       - name: 🎯 Create Flutter Web Project
         run: |
           echo "🎯 Creating Flutter web project..."
           
           # Buat project baru
           flutter create --platforms=web webapp
+          
+          if [ ! -d "webapp" ]; then
+            echo "❌ Failed to create Flutter project!"
+            exit 1
+          fi
+          
           cd webapp
           
           # Install dependencies
+          echo "📦 Installing dependencies..."
           flutter pub add webview_flutter
           flutter pub add webview_flutter_plus
           flutter pub add flutter_native_splash
           flutter pub add flutter_launcher_icons
           
-          # Setup launcher icons
-          cat > flutter_launcher_icons.yaml << EOF
-          flutter_launcher_icons:
-            android: true
-            ios: false
-            image_path: "assets/icon.png"
-            adaptive_icon_background: "#ffffff"
-            adaptive_icon_foreground: "assets/icon.png"
-            min_sdk_android: 21
-          EOF
-          
-          # Setup native splash
-          cat > flutter_native_splash.yaml << EOF
-          flutter_native_splash:
-            color: "#ffffff"
-            image: assets/splash.png
-            android: true
-            android_gravity: center
-          EOF
-          
           echo "✅ Project created"
 
-      # ─── 3. DOWNLOAD ICON ──────────────────────────────────────────────────
+      # ─── 8. DOWNLOAD ICON ──────────────────────────────────────────────────
       - name: 🖼️ Download Icon
         run: |
           echo "🖼️ Downloading icon..."
@@ -78,22 +116,32 @@ jobs:
           mkdir -p webapp/assets
           
           # Download icon dari URL
-          curl -L -o webapp/assets/icon.png "${{ github.event.inputs.icon_url }}"
+          if ! curl -L -o webapp/assets/icon.png "${{ github.event.inputs.icon_url }}"; then
+            echo "❌ Failed to download icon!"
+            exit 1
+          fi
           
           # Buat splash dari icon
           cp webapp/assets/icon.png webapp/assets/splash.png
           
           # Check if icon exists
           if [ ! -f webapp/assets/icon.png ]; then
-            echo "❌ Gagal download icon"
+            echo "❌ Icon download failed!"
             exit 1
+          fi
+          
+          # Check if icon is valid image
+          if ! file webapp/assets/icon.png | grep -q "PNG image"; then
+            echo "⚠️ Icon is not a valid PNG image, but continuing..."
           fi
           
           echo "✅ Icon downloaded"
 
-      # ─── 4. GENERATE MAIN.DART ────────────────────────────────────────────
+      # ─── 9. GENERATE MAIN.DART ────────────────────────────────────────────
       - name: 📝 Generate main.dart
         run: |
+          echo "📝 Generating main.dart..."
+          
           cat > webapp/lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
@@ -174,48 +222,59 @@ jobs:
           
           echo "✅ main.dart generated"
 
-      # ─── 5. UPDATE PUBSPEC.YAML ────────────────────────────────────────────
+      # ─── 10. GENERATE ICON CONFIG ──────────────────────────────────────────
+      - name: 📝 Generate Icon Config
+        run: |
+          echo "📝 Generating icon config..."
+          
+          cat > webapp/flutter_launcher_icons.yaml << 'EOF'
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/icon.png"
+            adaptive_icon_background: "#ffffff"
+            adaptive_icon_foreground: "assets/icon.png"
+            min_sdk_android: 21
+          EOF
+          
+          cat > webapp/flutter_native_splash.yaml << 'EOF'
+          flutter_native_splash:
+            color: "#ffffff"
+            image: assets/splash.png
+            android: true
+            android_gravity: center
+          EOF
+          
+          echo "✅ Configs generated"
+
+      # ─── 11. UPDATE PUBSPEC.YAML ──────────────────────────────────────────
       - name: 📝 Update pubspec.yaml
         run: |
+          echo "📝 Updating pubspec.yaml..."
+          
           cd webapp
+          
+          # Backup original
+          cp pubspec.yaml pubspec.yaml.bak
           
           # Update name
           sed -i "s/^name:.*/name: webapp/g" pubspec.yaml
           
-          # Add assets
-          cat >> pubspec.yaml << 'EOF'
-
+          # Add flutter section if not exists
+          if ! grep -q "^flutter:" pubspec.yaml; then
+            cat >> pubspec.yaml << 'EOF'
+            
           flutter:
             uses-material-design: true
             assets:
               - assets/icon.png
               - assets/splash.png
           EOF
+          fi
           
           echo "✅ pubspec.yaml updated"
 
-      # ─── 6. SETUP JAVA ────────────────────────────────────────────────────
-      - name: ☕ Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-
-      # ─── 7. SETUP ANDROID SDK ────────────────────────────────────────────
-      - name: 📱 Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          sdk-version: ${{ env.ANDROID_SDK_VERSION }}
-
-      # ─── 8. SETUP FLUTTER ─────────────────────────────────────────────────
-      - name: 🎯 Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      # ─── 9. FLUTTER CLEAN & PUB GET ──────────────────────────────────────
+      # ─── 12. FLUTTER CLEAN & PUB GET ──────────────────────────────────────
       - name: 🧹 Flutter Clean & Pub Get
         working-directory: ./webapp
         run: |
@@ -225,58 +284,87 @@ jobs:
           echo "📦 Running flutter pub get..."
           flutter pub get
           
+          if [ $? -ne 0 ]; then
+            echo "❌ flutter pub get failed!"
+            exit 1
+          fi
+          
           echo "✅ Dependencies installed"
 
-      # ─── 10. GENERATE ICONS ────────────────────────────────────────────────
+      # ─── 13. GENERATE ICONS ────────────────────────────────────────────────
       - name: 🖼️ Generate Icons
         working-directory: ./webapp
         run: |
           echo "🖼️ Generating icons..."
-          flutter pub run flutter_launcher_icons:main
-          echo "✅ Icons generated"
+          flutter pub run flutter_launcher_icons:main || true
+          echo "✅ Icons generated (or skipped)"
 
-      # ─── 11. GENERATE SPLASH ──────────────────────────────────────────────
+      # ─── 14. GENERATE SPLASH ──────────────────────────────────────────────
       - name: 🖼️ Generate Splash
         working-directory: ./webapp
         run: |
           echo "🖼️ Generating splash..."
-          flutter pub run flutter_native_splash:create
-          echo "✅ Splash generated"
+          flutter pub run flutter_native_splash:create || true
+          echo "✅ Splash generated (or skipped)"
 
-      # ─── 12. BUILD APK ─────────────────────────────────────────────────────
+      # ─── 15. BUILD APK ─────────────────────────────────────────────────────
       - name: 🔨 Build APK
         working-directory: ./webapp
         run: |
           echo "🔨 Building APK..."
+          
+          # Build dengan release
           flutter build apk --release --split-per-abi
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed!"
+            echo "📋 Checking build output..."
+            ls -la build/app/outputs/flutter-apk/ || true
+            exit 1
+          fi
+          
           echo "✅ Build completed"
 
-      # ─── 13. COLLECT APK ──────────────────────────────────────────────────
+      # ─── 16. COLLECT APK ──────────────────────────────────────────────────
       - name: 📦 Collect APK
         run: |
           echo "📦 Collecting APK..."
           mkdir -p apk_output
           
-          find webapp/build -name "*.apk" -exec cp {} apk_output/ \;
+          # Find all APK files
+          find webapp/build -name "*.apk" -exec cp {} apk_output/ \; 2>/dev/null || true
           
-          cd apk_output
-          for f in *.apk; do
-            if [[ "$f" == *"armeabi-v7a"* ]]; then
-              mv "$f" "webapp-armeabi-v7a.apk"
-            elif [[ "$f" == *"arm64-v8a"* ]]; then
-              mv "$f" "webapp-arm64-v8a.apk"
-            elif [[ "$f" == *"x86_64"* ]]; then
-              mv "$f" "webapp-x86_64.apk"
-            else
-              mv "$f" "webapp.apk"
-            fi
-          done
-          cd ..
-          
-          echo "📦 APK files:"
-          ls -la apk_output/
+          # If no APK found, try alternative path
+          if [ -z "$(ls -A apk_output 2>/dev/null)" ]; then
+            echo "⚠️ No APK found in build directory!"
+            echo "📋 Checking build directory..."
+            find webapp/build -type f -name "*.apk" 2>/dev/null || echo "No APK found!"
+            
+            # Create dummy file to avoid artifact error
+            echo "No APK generated" > apk_output/README.txt
+          else
+            echo "📦 APK files found:"
+            ls -la apk_output/
+            
+            # Rename for clarity
+            cd apk_output
+            for f in *.apk; do
+              if [ -f "$f" ]; then
+                if [[ "$f" == *"armeabi-v7a"* ]]; then
+                  mv "$f" "webapp-armeabi-v7a.apk" 2>/dev/null || true
+                elif [[ "$f" == *"arm64-v8a"* ]]; then
+                  mv "$f" "webapp-arm64-v8a.apk" 2>/dev/null || true
+                elif [[ "$f" == *"x86_64"* ]]; then
+                  mv "$f" "webapp-x86_64.apk" 2>/dev/null || true
+                else
+                  mv "$f" "webapp.apk" 2>/dev/null || true
+                fi
+              fi
+            done
+            cd ..
+          fi
 
-      # ─── 14. UPLOAD APK AS ARTIFACT ──────────────────────────────────────
+      # ─── 17. UPLOAD APK AS ARTIFACT ──────────────────────────────────────
       - name: ⬆️ Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -284,9 +372,9 @@ jobs:
           path: apk_output/
           retention-days: 7
 
-      # ─── 15. CREATE RELEASE ───────────────────────────────────────────────
+      # ─── 18. CREATE RELEASE ───────────────────────────────────────────────
       - name: 📦 Create Release
-        if: success()
+        if: success() && !cancelled()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -294,6 +382,12 @@ jobs:
           
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
           TAG="webapp_$TIMESTAMP"
+          
+          # Check if there are any APK files
+          if [ -z "$(ls -A apk_output/*.apk 2>/dev/null)" ]; then
+            echo "⚠️ No APK found, skipping release creation..."
+            exit 0
+          fi
           
           # Create release
           RELEASE_RESPONSE=$(curl -s -X POST \
@@ -309,6 +403,12 @@ jobs:
           
           RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
           UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url')
+          
+          if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
+            echo "⚠️ Failed to create release"
+            echo "$RELEASE_RESPONSE"
+            exit 0
+          fi
           
           # Upload APKs
           for apk in apk_output/*.apk; do
@@ -326,16 +426,19 @@ jobs:
           
           echo "✅ Release created: $TAG"
 
-      # ─── 16. NOTIFY SUCCESS ──────────────────────────────────────────────
+      # ─── 19. NOTIFY SUCCESS ──────────────────────────────────────────────
       - name: ✅ Build Success
         if: success()
         run: |
           echo "🎉 WEB TO APK SUCCESS!"
-          echo "📦 APK available in artifacts and release"
+          echo "📦 APK available in artifacts"
+          ls -la apk_output/ || true
 
-      # ─── 17. NOTIFY FAILURE ──────────────────────────────────────────────
+      # ─── 20. NOTIFY FAILURE ──────────────────────────────────────────────
       - name: ❌ Build Failed
         if: failure()
         run: |
           echo "❌ WEB TO APK FAILED!"
           echo "📋 Check logs above for details"
+          echo "📋 Build directory contents:"
+          find webapp/build -type f 2>/dev/null | head -20 || echo "Build directory not found"

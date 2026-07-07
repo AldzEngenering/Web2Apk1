@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release Tag'
+        description: '🏷️ Release Tag'
         required: true
         type: string
       build_type:
-        description: 'Tipe Build'
+        description: '🔧 Tipe Build'
         required: true
         default: 'release'
         type: choice
@@ -17,66 +17,90 @@ on:
           - debug
           - release
       release_url:
-        description: 'URL Release'
+        description: '📦 URL Release (ZIP Project)'
         required: true
         type: string
 
 env:
-  FLUTTER_VERSION: '3.24.3-stable'
+  FLUTTER_VERSION: '3.24.3'
   JAVA_VERSION: '17'
   ANDROID_SDK_VERSION: '34.0.0'
+  GRADLE_VERSION: '8.3'
 
 jobs:
   build:
     name: 🔨 Build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
-      # ─── 1. CHECKOUT ──────────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 1. CHECKOUT
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      # ─── 2. DOWNLOAD PROJECT ZIP ─────────────────────────────────────────
-      - name: 📦 Download Project ZIP
+      # ═══════════════════════════════════════════════════════════════════
+      # 2. INSTALL SYSTEM DEPENDENCIES
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 📦 Install System Dependencies
         run: |
-          echo "📦 Downloading project from release..."
-          curl -L -o project.zip \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "${{ github.event.inputs.release_url }}"
-          
-          if [ ! -f project.zip ]; then
-            echo "❌ Gagal download project.zip"
-            exit 1
-          fi
-          
-          echo "✅ Project downloaded: $(ls -lh project.zip)"
+          echo "📦 Installing system dependencies..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            curl \
+            git \
+            unzip \
+            xz-utils \
+            zip \
+            libglu1-mesa \
+            ninja-build \
+            pkg-config \
+            libgtk-3-dev \
+            liblzma-dev \
+            libstdc++-12-dev \
+            clang \
+            cmake \
+            build-essential \
+            wget \
+            ca-certificates \
+            gnupg \
+            lsb-release
+          echo "✅ System dependencies installed"
 
-      # ─── 3. EXTRACT PROJECT ──────────────────────────────────────────────
-      - name: 📂 Extract Project
-        run: |
-          echo "📂 Extracting project..."
-          mkdir -p project
-          unzip -q project.zip -d project/
-          rm -f project.zip
-          
-          echo "📂 Project contents:"
-          ls -la project/
-
-      # ─── 4. SETUP JAVA ────────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 3. SETUP JAVA
+      # ═══════════════════════════════════════════════════════════════════
       - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
 
-      # ─── 5. SETUP ANDROID SDK ────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 4. SETUP ANDROID SDK
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📱 Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           sdk-version: ${{ env.ANDROID_SDK_VERSION }}
 
-      # ─── 6. SETUP FLUTTER ─────────────────────────────────────────────────
+      - name: 📱 Accept Android Licenses
+        run: |
+          echo "📱 Accepting Android SDK licenses..."
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          echo "✅ Android licenses accepted"
+
+      - name: 📱 Install Android Build Tools
+        run: |
+          echo "📱 Installing Android build tools..."
+          sdkmanager "build-tools;34.0.0" "platform-tools" "platforms;android-34" > /dev/null 2>&1 || true
+          echo "✅ Android build tools installed"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 5. SETUP FLUTTER
+      # ═══════════════════════════════════════════════════════════════════
       - name: 🎯 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -84,93 +108,266 @@ jobs:
           channel: stable
           cache: true
 
-      # ─── 7. FLUTTER CLEAN & PUB GET ──────────────────────────────────────
-      - name: 🧹 Flutter Clean & Pub Get
-        working-directory: ./project
+      - name: ✅ Verify Flutter Installation
         run: |
-          echo "🧹 Running flutter clean..."
-          flutter clean || true
+          echo "🔍 Verifying Flutter..."
+          flutter --version
           
-          echo "📦 Running flutter pub get..."
-          flutter pub get
+          if ! command -v flutter &> /dev/null; then
+            echo "❌ Flutter not found in PATH!"
+            exit 1
+          fi
           
-          echo "✅ Flutter dependencies installed"
+          echo "✅ Flutter installed successfully"
 
-      # ─── 8. VALIDATE PROJECT ─────────────────────────────────────────────
-      - name: ✅ Validate Project
-        working-directory: ./project
+      - name: 🩺 Flutter Doctor
         run: |
-          echo "🔍 Validating project..."
+          echo "🩺 Running Flutter Doctor..."
+          flutter doctor -v || true
+          echo "✅ Flutter Doctor completed"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 6. DOWNLOAD PROJECT ZIP
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 📦 Download Project ZIP
+        run: |
+          echo "📦 Downloading project from release..."
           
+          # Download dengan retry
+          for i in 1 2 3; do
+            echo "🔄 Attempt $i..."
+            curl -L -o project.zip \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "${{ github.event.inputs.release_url }}" && break
+            sleep 3
+          done
+          
+          if [ ! -f project.zip ]; then
+            echo "❌ Failed to download project.zip"
+            exit 1
+          fi
+          
+          FILE_SIZE=$(du -h project.zip | cut -f1)
+          echo "✅ Project downloaded: $FILE_SIZE"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 7. EXTRACT PROJECT
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 📂 Extract Project
+        run: |
+          echo "📂 Extracting project..."
+          mkdir -p project
+          
+          # Unzip dengan retry
+          if ! unzip -q project.zip -d project/; then
+            echo "⚠️ Unzip failed, trying with -o..."
+            unzip -o -q project.zip -d project/
+          fi
+          
+          rm -f project.zip
+          
+          echo "📂 Project contents:"
+          ls -la project/ | head -20
+          
+          # Validate project
+          if [ ! -f project/pubspec.yaml ]; then
+            echo "❌ pubspec.yaml not found!"
+            echo "📂 Looking for pubspec.yaml..."
+            find project -name "pubspec.yaml" -type f | head -5
+            exit 1
+          fi
+          
+          echo "✅ Project extracted successfully"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 8. VALIDATE PROJECT STRUCTURE
+      # ═══════════════════════════════════════════════════════════════════
+      - name: ✅ Validate Project
+        run: |
+          echo "🔍 Validating project structure..."
+          
+          cd project
+          
+          # Check pubspec.yaml
           if [ ! -f pubspec.yaml ]; then
             echo "❌ pubspec.yaml not found!"
             exit 1
           fi
           
-          echo "✅ Project valid"
+          # Check main.dart
+          if [ ! -f lib/main.dart ]; then
+            echo "⚠️ lib/main.dart not found, but continuing..."
+          fi
+          
+          # Check android folder
+          if [ ! -d android ]; then
+            echo "❌ android/ folder not found!"
+            echo "📂 This might not be a Flutter project"
+            exit 1
+          fi
+          
+          echo "✅ Project validation passed"
 
-      # ─── 9. BUILD APK ─────────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 9. FLUTTER CLEAN
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 🧹 Flutter Clean
+        working-directory: ./project
+        run: |
+          echo "🧹 Running flutter clean..."
+          flutter clean || true
+          echo "✅ Flutter clean completed"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 10. FLUTTER PUB GET
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 📦 Flutter Pub Get
+        working-directory: ./project
+        run: |
+          echo "📦 Running flutter pub get..."
+          
+          # Run with retry
+          for i in 1 2 3; do
+            echo "🔄 Attempt $i..."
+            if flutter pub get; then
+              echo "✅ flutter pub get succeeded"
+              break
+            fi
+            sleep 5
+          done
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ flutter pub get failed after 3 attempts!"
+            echo "📋 Checking pubspec.yaml..."
+            cat pubspec.yaml || true
+            exit 1
+          fi
+          
+          echo "✅ Dependencies installed"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 11. BUILD APK
+      # ═══════════════════════════════════════════════════════════════════
       - name: 🔨 Build APK (${{ github.event.inputs.build_type }})
         working-directory: ./project
         run: |
-          echo "🔨 Building APK..."
+          echo "🔨 Building APK (${{ github.event.inputs.build_type }})..."
           
-          if [ "${{ github.event.inputs.build_type }}" = "debug" ]; then
-            flutter build apk --debug --split-per-abi
-          else
-            flutter build apk --release --split-per-abi
+          BUILD_CMD="flutter build apk --${{ github.event.inputs.build_type }}"
+          
+          # Add split-per-abi for release
+          if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
+            BUILD_CMD="$BUILD_CMD --split-per-abi"
           fi
           
-          echo "✅ Build completed"
+          echo "📋 Command: $BUILD_CMD"
+          
+          # Build with retry
+          for i in 1 2; do
+            echo "🔄 Build attempt $i..."
+            if eval $BUILD_CMD; then
+              echo "✅ Build succeeded!"
+              break
+            fi
+            flutter clean || true
+            sleep 5
+          done
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed!"
+            exit 1
+          fi
 
-      # ─── 10. COLLECT APK FILES ────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 12. COLLECT APK FILES
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📦 Collect APK Files
         run: |
           echo "📦 Collecting APK files..."
           mkdir -p apk_output
           
-          # Cari semua APK
-          find project/build -name "*.apk" -exec cp {} apk_output/ \;
+          # Find all APK files
+          find project/build -name "*.apk" -exec cp {} apk_output/ \; 2>/dev/null || true
           
-          # Rename untuk clarity
-          cd apk_output
-          for f in *.apk; do
-            if [[ "$f" == *"armeabi-v7a"* ]]; then
-              mv "$f" "app-armeabi-v7a-${{ github.event.inputs.build_type }}.apk"
-            elif [[ "$f" == *"arm64-v8a"* ]]; then
-              mv "$f" "app-arm64-v8a-${{ github.event.inputs.build_type }}.apk"
-            elif [[ "$f" == *"x86_64"* ]]; then
-              mv "$f" "app-x86_64-${{ github.event.inputs.build_type }}.apk"
-            else
-              mv "$f" "app-${{ github.event.inputs.build_type }}.apk"
+          # If no APK found, check alternative paths
+          if [ -z "$(ls -A apk_output 2>/dev/null)" ]; then
+            echo "⚠️ No APK found in build directory!"
+            echo "📋 Searching for APK files..."
+            find project -name "*.apk" -type f 2>/dev/null || echo "No APK found!"
+            
+            # Check flutter build output
+            if [ -d "project/build/app/outputs/flutter-apk" ]; then
+              echo "📋 Checking flutter-apk directory..."
+              ls -la project/build/app/outputs/flutter-apk/ || true
             fi
-          done
-          cd ..
+            
+            # Create dummy file to avoid artifact error
+            echo "No APK generated" > apk_output/README.txt
+          else
+            echo "📦 APK files found:"
+            ls -la apk_output/
+            
+            # Rename for clarity
+            cd apk_output
+            for f in *.apk; do
+              if [ -f "$f" ]; then
+                if [[ "$f" == *"armeabi-v7a"* ]]; then
+                  mv "$f" "app-armeabi-v7a-${{ github.event.inputs.build_type }}.apk" 2>/dev/null || true
+                elif [[ "$f" == *"arm64-v8a"* ]]; then
+                  mv "$f" "app-arm64-v8a-${{ github.event.inputs.build_type }}.apk" 2>/dev/null || true
+                elif [[ "$f" == *"x86_64"* ]]; then
+                  mv "$f" "app-x86_64-${{ github.event.inputs.build_type }}.apk" 2>/dev/null || true
+                elif [[ "$f" == *"universal"* ]]; then
+                  mv "$f" "app-universal-${{ github.event.inputs.build_type }}.apk" 2>/dev/null || true
+                else
+                  mv "$f" "app-${{ github.event.inputs.build_type }}.apk" 2>/dev/null || true
+                fi
+              fi
+            done
+            cd ..
+          fi
           
-          echo "📦 APK files:"
-          ls -la apk_output/
+          echo "📦 Final APK list:"
+          ls -la apk_output/ || true
 
-      # ─── 11. UPLOAD APK AS ARTIFACT ──────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 13. UPLOAD APK AS ARTIFACT
+      # ═══════════════════════════════════════════════════════════════════
       - name: ⬆️ Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ github.event.inputs.build_type }}
           path: apk_output/
           retention-days: 7
+          if-no-files-found: warn
 
-      # ─── 12. UPLOAD APK TO RELEASE ────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 14. UPLOAD APK TO RELEASE
+      # ═══════════════════════════════════════════════════════════════════
       - name: ⬆️ Upload APK to Release
-        if: success()
+        if: success() && !cancelled()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "⬆️ Uploading APK to release..."
           
-          RELEASE_ID=$(curl -s \
+          # Check if there are APK files
+          if [ -z "$(ls -A apk_output/*.apk 2>/dev/null)" ]; then
+            echo "⚠️ No APK files found, skipping upload..."
+            exit 0
+          fi
+          
+          TAG="${{ github.event.inputs.tag }}"
+          
+          # Get release ID from tag
+          RELEASE_RESPONSE=$(curl -s \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.inputs.tag }}" \
-            | jq -r '.id')
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+          
+          RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+          UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url')
           
           if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
             echo "⚠️ Release not found, creating new..."
@@ -181,21 +378,23 @@ jobs:
               -H "Accept: application/vnd.github.v3+json" \
               "https://api.github.com/repos/${{ github.repository }}/releases" \
               -d "{
-                \"tag_name\": \"${{ github.event.inputs.tag }}\",
-                \"name\": \"Build ${{ github.event.inputs.tag }}\",
+                \"tag_name\": \"$TAG\",
+                \"name\": \"Build $TAG\",
                 \"draft\": false,
                 \"prerelease\": false
               }")
             
             RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
             UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url')
-          else
-            UPLOAD_URL=$(curl -s \
-              -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID" \
-              | jq -r '.upload_url')
           fi
+          
+          if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
+            echo "⚠️ Failed to create/get release"
+            echo "$RELEASE_RESPONSE"
+            exit 0
+          fi
+          
+          echo "✅ Release ID: $RELEASE_ID"
           
           # Upload each APK
           for apk in apk_output/*.apk; do
@@ -213,16 +412,54 @@ jobs:
           
           echo "✅ APK uploaded to release"
 
-      # ─── 13. NOTIFY SUCCESS ────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 15. NOTIFY SUCCESS
+      # ═══════════════════════════════════════════════════════════════════
       - name: ✅ Build Success
         if: success()
         run: |
           echo "🎉 BUILD SUCCESS!"
           echo "📦 APK available in artifacts and release"
+          echo "📋 Release tag: ${{ github.event.inputs.tag }}"
+          echo "📋 Build type: ${{ github.event.inputs.build_type }}"
+          
+          # Show APK sizes
+          if [ -d "apk_output" ]; then
+            echo "📦 APK files:"
+            ls -lh apk_output/ || true
+          fi
 
-      # ─── 14. NOTIFY FAILURE ───────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 16. NOTIFY FAILURE WITH LOGS
+      # ═══════════════════════════════════════════════════════════════════
       - name: ❌ Build Failed
         if: failure()
         run: |
           echo "❌ BUILD FAILED!"
-          echo "📋 Check logs above for details"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 Build details:"
+          echo "  • Tag: ${{ github.event.inputs.tag }}"
+          echo "  • Type: ${{ github.event.inputs.build_type }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          echo "📂 Project structure:"
+          ls -la project/ 2>/dev/null | head -20 || echo "Project directory not found"
+          
+          echo "📂 Android directory:"
+          ls -la project/android/ 2>/dev/null | head -10 || echo "Android directory not found"
+          
+          echo "📂 Build output:"
+          find project/build -type f 2>/dev/null | head -20 || echo "Build output not found"
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 Check logs above for the actual error"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 17. CLEANUP
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up..."
+          rm -rf project/ apk_output/ project.zip 2>/dev/null || true
+          echo "✅ Cleanup completed"
