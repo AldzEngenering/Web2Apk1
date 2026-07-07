@@ -61,18 +61,19 @@ jobs:
             ca-certificates \
             gnupg \
             lsb-release \
-            file
+            file \
+            imagemagick
           echo "✅ System dependencies installed"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 3. SETUP JAVA (TANPA CACHE)
+      # 3. SETUP JAVA
       # ═══════════════════════════════════════════════════════════════════
       - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: ${{ env.JAVA_VERSION }}
-          # HAPUS CACHE - karena Gradle file belum ada
+          # Tanpa cache karena Gradle file dibuat dinamis
 
       # ═══════════════════════════════════════════════════════════════════
       # 4. SETUP ANDROID SDK
@@ -129,7 +130,6 @@ jobs:
         run: |
           echo "🎯 Creating Flutter web project..."
           
-          # Create project
           flutter create --platforms=web webapp
           
           if [ ! -d "webapp" ]; then
@@ -139,7 +139,6 @@ jobs:
           
           cd webapp
           
-          # Install dependencies
           echo "📦 Installing dependencies..."
           flutter pub add webview_flutter
           flutter pub add webview_flutter_plus
@@ -149,294 +148,57 @@ jobs:
           echo "✅ Project created"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 7. FIX GRADLE PROJECT (AUTO-REPAIR) — FULL FIXED
+      # 7. DOWNLOAD DAN VALIDASI ICON
       # ═══════════════════════════════════════════════════════════════════
-      - name: 🔧 Fix Gradle Project
-        working-directory: ./webapp
+      - name: 🖼️ Download & Validate Icon
         run: |
-          echo "🔧 Fixing Gradle project..."
-          
-          # ─── BUAT FOLDER YANG DIBUTUHKAN ──────────────────────────────
-          echo "📁 Creating required folders..."
-          mkdir -p android/gradle/wrapper
-          mkdir -p android/app/src/main
-          mkdir -p android/app/src/main/res/values
-          mkdir -p android/app/src/main/res/drawable
-          mkdir -p android/app/src/main/res/drawable-v21
-          mkdir -p android/app/src/main/kotlin/com/example/webapp
-          
-          # ─── gradle-wrapper.properties ─────────────────────────────────
-          echo "🔧 Creating gradle-wrapper.properties..."
-          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.3-bin.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          
-          # ─── settings.gradle ────────────────────────────────────────────
-          echo "🔧 Creating settings.gradle..."
-          cat > android/settings.gradle << 'EOF'
-          include ':app'
-
-          def localPropertiesFile = new File(rootProject.projectDir, "local.properties")
-          def properties = new Properties()
-
-          assert localPropertiesFile.exists()
-          localPropertiesFile.withReader("UTF-8") { reader -> properties.load(reader) }
-
-          def flutterSdkPath = properties.getProperty("flutter.sdk")
-          assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
-          apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
-          EOF
-          
-          # ─── local.properties ────────────────────────────────────────────
-          echo "🔧 Creating local.properties..."
-          cat > android/local.properties << 'EOF'
-          sdk.dir=/usr/local/lib/android/sdk
-          flutter.sdk=/opt/flutter
-          EOF
-          
-          # ─── project build.gradle ──────────────────────────────────────
-          echo "🔧 Creating project build.gradle..."
-          cat > android/build.gradle << 'EOF'
-          buildscript {
-              ext.kotlin_version = '1.9.22'
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:7.4.2'
-                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-              }
-          }
-
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-
-          rootProject.buildDir = '../build'
-          subprojects {
-              project.buildDir = "${rootProject.buildDir}/${project.name}"
-          }
-          subprojects {
-              project.evaluationDependsOn(':app')
-          }
-
-          tasks.register('clean', Delete) {
-              delete rootProject.buildDir
-          }
-          EOF
-          
-          # ─── app/build.gradle ──────────────────────────────────────────
-          echo "🔧 Creating app/build.gradle..."
-          cat > android/app/build.gradle << 'EOF'
-          def localProperties = new Properties()
-          def localPropertiesFile = rootProject.file('local.properties')
-          if (localPropertiesFile.exists()) {
-              localPropertiesFile.withReader('UTF-8') { reader ->
-                  localProperties.load(reader)
-              }
-          }
-
-          def flutterRoot = localProperties.getProperty('flutter.sdk')
-          if (flutterRoot == null) {
-              throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
-          }
-
-          def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
-          if (flutterVersionCode == null) {
-              flutterVersionCode = '1'
-          }
-
-          def flutterVersionName = localProperties.getProperty('flutter.versionName')
-          if (flutterVersionName == null) {
-              flutterVersionName = '1.0'
-          }
-
-          apply plugin: 'com.android.application'
-          apply plugin: 'kotlin-android'
-          apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
-
-          android {
-              namespace 'com.example.webapp'
-              compileSdkVersion 34
-              ndkVersion flutter.ndkVersion
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = '17'
-              }
-
-              sourceSets {
-                  main.java.srcDirs += 'src/main/kotlin'
-              }
-
-              defaultConfig {
-                  applicationId "com.example.webapp"
-                  minSdkVersion 21
-                  targetSdkVersion 34
-                  versionCode flutterVersionCode.toInteger()
-                  versionName flutterVersionName
-              }
-
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.debug
-                      minifyEnabled true
-                      proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-                  }
-                  debug {
-                      signingConfig signingConfigs.debug
-                      minifyEnabled false
-                  }
-              }
-          }
-
-          flutter {
-              source '../..'
-          }
-
-          dependencies {
-              implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
-          }
-          EOF
-          
-          # ─── proguard-rules.pro ──────────────────────────────────────────
-          echo "🔧 Creating proguard-rules.pro..."
-          cat > android/app/proguard-rules.pro << 'EOF'
-          # Flutter specific
-          -keep class io.flutter.app.** { *; }
-          -keep class io.flutter.plugin.**  { *; }
-          -keep class io.flutter.util.**  { *; }
-          -keep class io.flutter.view.**  { *; }
-          -keep class io.flutter.**  { *; }
-          -keep class io.flutter.plugins.**  { *; }
-          EOF
-          
-          # ─── AndroidManifest.xml ──────────────────────────────────────
-          echo "🔧 Creating AndroidManifest.xml..."
-          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.example.webapp">
-              
-              <application
-                  android:label="webapp"
-                  android:name="${applicationName}"
-                  android:icon="@mipmap/ic_launcher">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:launchMode="singleTop"
-                      android:theme="@style/LaunchTheme"
-                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                      android:hardwareAccelerated="true"
-                      android:windowSoftInputMode="adjustResize">
-                      <meta-data
-                          android:name="io.flutter.embedding.android.NormalTheme"
-                          android:resource="@style/NormalTheme"
-                          />
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-                  <meta-data
-                      android:name="flutterEmbedding"
-                      android:value="2" />
-              </application>
-          </manifest>
-          EOF
-          
-          # ─── MainActivity.kt ──────────────────────────────────────────────
-          echo "🔧 Creating MainActivity.kt..."
-          cat > android/app/src/main/kotlin/com/example/webapp/MainActivity.kt << 'EOF'
-          package com.example.webapp
-
-          import io.flutter.embedding.android.FlutterActivity
-
-          class MainActivity : FlutterActivity()
-          EOF
-          
-          # ─── styles.xml ──────────────────────────────────────────────────
-          echo "🔧 Creating styles.xml..."
-          cat > android/app/src/main/res/values/styles.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
-                  <item name="android:windowBackground">@drawable/launch_background</item>
-              </style>
-              <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
-                  <item name="android:windowBackground">?android:colorBackground</item>
-              </style>
-          </resources>
-          EOF
-          
-          # ─── launch_background.xml ──────────────────────────────────────
-          echo "🔧 Creating launch_background.xml..."
-          cat > android/app/src/main/res/drawable/launch_background.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-              <item android:drawable="@android:color/white" />
-              <item>
-                  <bitmap
-                      android:gravity="center"
-                      android:src="@mipmap/ic_launcher" />
-              </item>
-          </layer-list>
-          EOF
-          
-          cat > android/app/src/main/res/drawable-v21/launch_background.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-              <item android:drawable="?android:colorBackground" />
-              <item>
-                  <bitmap
-                      android:gravity="center"
-                      android:src="@mipmap/ic_launcher" />
-              </item>
-          </layer-list>
-          EOF
-          
-          echo "✅ Gradle project fixed!"
-
-      # ═══════════════════════════════════════════════════════════════════
-      # 8. DOWNLOAD ICON
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 🖼️ Download Icon
-        run: |
-          echo "🖼️ Downloading icon..."
+          echo "🖼️ Downloading and validating icon..."
           
           mkdir -p webapp/assets
           
+          # Download icon
           for i in 1 2 3; do
             echo "🔄 Attempt $i..."
-            if curl -L -o webapp/assets/icon.png "${{ github.event.inputs.icon_url }}"; then
+            if curl -L -o webapp/assets/icon_raw.png "${{ github.event.inputs.icon_url }}"; then
               break
             fi
             sleep 2
           done
           
-          if [ ! -f webapp/assets/icon.png ]; then
+          if [ ! -f webapp/assets/icon_raw.png ]; then
             echo "❌ Failed to download icon!"
             exit 1
           fi
           
+          # Check if file is valid image
+          if ! file webapp/assets/icon_raw.png | grep -q "PNG\|JPEG\|JPG\|image"; then
+            echo "⚠️ Downloaded file is not a valid image!"
+            echo "📋 Creating fallback icon..."
+            
+            # Create fallback icon with ImageMagick
+            convert -size 512x512 xc:blue \
+              -font Helvetica -pointsize 100 -fill white \
+              -gravity center -annotate +0+0 "APP" \
+              webapp/assets/icon.png
+          else
+            # Convert to PNG if needed
+            convert webapp/assets/icon_raw.png webapp/assets/icon.png 2>/dev/null || \
+              cp webapp/assets/icon_raw.png webapp/assets/icon.png
+          fi
+          
+          # Ensure icon exists
+          if [ ! -f webapp/assets/icon.png ]; then
+            echo "❌ Failed to create icon!"
+            exit 1
+          fi
+          
+          # Create splash from icon
           cp webapp/assets/icon.png webapp/assets/splash.png
-          echo "✅ Icon downloaded"
+          
+          echo "✅ Icon ready"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 9. GENERATE MAIN.DART
+      # 8. GENERATE MAIN.DART (TANPA SPLASH)
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Generate main.dart
         run: |
@@ -445,11 +207,8 @@ jobs:
           cat > webapp/lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
-          import 'package:flutter_native_splash/flutter_native_splash.dart';
 
           void main() {
-            WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
-            FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
             runApp(const MyApp());
           }
 
@@ -489,18 +248,14 @@ jobs:
                 ..setNavigationDelegate(
                   NavigationDelegate(
                     onPageFinished: (String url) {
-                      FlutterNativeSplash.remove();
+                      // Page loaded
                     },
                     onWebResourceError: (WebResourceError error) {
-                      FlutterNativeSplash.remove();
+                      // Handle error
                     },
                   ),
                 )
                 ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
-              
-              Future.delayed(const Duration(seconds: 3), () {
-                FlutterNativeSplash.remove();
-              });
             }
 
             @override
@@ -528,11 +283,11 @@ jobs:
           echo "✅ main.dart generated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 10. GENERATE CONFIG FILES
+      # 9. GENERATE ICON CONFIG (TANPA SPLASH)
       # ═══════════════════════════════════════════════════════════════════
-      - name: 📝 Generate Config Files
+      - name: 📝 Generate Icon Config
         run: |
-          echo "📝 Generating config files..."
+          echo "📝 Generating icon config..."
           
           cat > webapp/flutter_launcher_icons.yaml << 'EOF'
           flutter_launcher_icons:
@@ -544,18 +299,10 @@ jobs:
             min_sdk_android: 21
           EOF
           
-          cat > webapp/flutter_native_splash.yaml << 'EOF'
-          flutter_native_splash:
-            color: "#ffffff"
-            image: assets/splash.png
-            android: true
-            android_gravity: center
-          EOF
-          
-          echo "✅ Config files generated"
+          echo "✅ Config generated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 11. UPDATE PUBSPEC.YAML
+      # 10. UPDATE PUBSPEC.YAML
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Update pubspec.yaml
         run: |
@@ -568,6 +315,9 @@ jobs:
           PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]/_/g' | sed 's/_\+/_/g' | sed 's/^_//;s/_$//')
           sed -i "s/^name:.*/name: $PACKAGE_NAME/g" pubspec.yaml
           
+          # Remove splash dependencies from pubspec
+          sed -i '/flutter_native_splash/d' pubspec.yaml
+          
           if ! grep -q "^flutter:" pubspec.yaml; then
             cat >> pubspec.yaml << 'EOF'
             
@@ -575,11 +325,159 @@ jobs:
             uses-material-design: true
             assets:
               - assets/icon.png
-              - assets/splash.png
           EOF
           fi
           
           echo "✅ pubspec.yaml updated"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 11. FIX GRADLE PROJECT (SEDERHANA)
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 🔧 Fix Gradle Project
+        working-directory: ./webapp
+        run: |
+          echo "🔧 Fixing Gradle project..."
+          
+          mkdir -p android/gradle/wrapper
+          mkdir -p android/app/src/main
+          
+          # gradle-wrapper.properties
+          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.3-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          
+          # settings.gradle
+          cat > android/settings.gradle << 'EOF'
+          include ':app'
+          def localPropertiesFile = new File(rootProject.projectDir, "local.properties")
+          def properties = new Properties()
+          assert localPropertiesFile.exists()
+          localPropertiesFile.withReader("UTF-8") { reader -> properties.load(reader) }
+          def flutterSdkPath = properties.getProperty("flutter.sdk")
+          assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
+          apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
+          EOF
+          
+          # local.properties
+          cat > android/local.properties << 'EOF'
+          sdk.dir=/usr/local/lib/android/sdk
+          flutter.sdk=/opt/flutter
+          EOF
+          
+          # project build.gradle
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.22'
+              repositories { google(); mavenCentral() }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:7.4.2'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
+          allprojects {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.buildDir = '../build'
+          subprojects { project.buildDir = "${rootProject.buildDir}/${project.name}" }
+          subprojects { project.evaluationDependsOn(':app') }
+          tasks.register('clean', Delete) { delete rootProject.buildDir }
+          EOF
+          
+          # app/build.gradle
+          cat > android/app/build.gradle << 'EOF'
+          def localProperties = new Properties()
+          def localPropertiesFile = rootProject.file('local.properties')
+          if (localPropertiesFile.exists()) {
+              localPropertiesFile.withReader('UTF-8') { reader ->
+                  localProperties.load(reader)
+              }
+          }
+          def flutterRoot = localProperties.getProperty('flutter.sdk')
+          if (flutterRoot == null) {
+              throw new GradleException("Flutter SDK not found.")
+          }
+          def flutterVersionCode = localProperties.getProperty('flutter.versionCode') ?: '1'
+          def flutterVersionName = localProperties.getProperty('flutter.versionName') ?: '1.0'
+          
+          apply plugin: 'com.android.application'
+          apply plugin: 'kotlin-android'
+          apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+          
+          android {
+              namespace 'com.example.webapp'
+              compileSdkVersion 34
+              ndkVersion flutter.ndkVersion
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = '17' }
+              sourceSets { main.java.srcDirs += 'src/main/kotlin' }
+              defaultConfig {
+                  applicationId "com.example.webapp"
+                  minSdkVersion 21
+                  targetSdkVersion 34
+                  versionCode flutterVersionCode.toInteger()
+                  versionName flutterVersionName
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.debug
+                      minifyEnabled true
+                      proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                  }
+                  debug {
+                      signingConfig signingConfigs.debug
+                      minifyEnabled false
+                  }
+              }
+          }
+          flutter { source '../..' }
+          dependencies {
+              implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+          }
+          EOF
+          
+          # proguard-rules.pro
+          mkdir -p android/app
+          cat > android/app/proguard-rules.pro << 'EOF'
+          -keep class io.flutter.app.** { *; }
+          -keep class io.flutter.plugin.**  { *; }
+          -keep class io.flutter.util.**  { *; }
+          -keep class io.flutter.view.**  { *; }
+          -keep class io.flutter.**  { *; }
+          -keep class io.flutter.plugins.**  { *; }
+          EOF
+          
+          # AndroidManifest.xml
+          mkdir -p android/app/src/main
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.example.webapp">
+              <application android:label="webapp" android:icon="@mipmap/ic_launcher">
+                  <activity android:name=".MainActivity" android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme"/>
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <meta-data android:name="flutterEmbedding" android:value="2" />
+              </application>
+          </manifest>
+          EOF
+          
+          echo "✅ Gradle project fixed!"
 
       # ═══════════════════════════════════════════════════════════════════
       # 12. FLUTTER CLEAN & PUB GET
@@ -613,21 +511,14 @@ jobs:
           echo "✅ Dependencies installed"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 13. GENERATE ICONS & SPLASH
+      # 13. GENERATE ICON ONLY
       # ═══════════════════════════════════════════════════════════════════
-      - name: 🖼️ Generate Icons
+      - name: 🖼️ Generate Icon
         working-directory: ./webapp
         run: |
-          echo "🖼️ Generating icons..."
+          echo "🖼️ Generating icon..."
           flutter pub run flutter_launcher_icons:main || true
-          echo "✅ Icons generated"
-
-      - name: 🖼️ Generate Splash
-        working-directory: ./webapp
-        run: |
-          echo "🖼️ Generating splash..."
-          flutter pub run flutter_native_splash:create || true
-          echo "✅ Splash generated"
+          echo "✅ Icon generated"
 
       # ═══════════════════════════════════════════════════════════════════
       # 14. BUILD APK
@@ -637,16 +528,12 @@ jobs:
         run: |
           echo "🔨 Building APK..."
           
+          # Try normal build
           if ! flutter build apk --release --split-per-abi; then
-            echo "⚠️ First build attempt failed!"
-            
+            echo "⚠️ Build failed, trying with --no-shuffle..."
             if ! flutter build apk --release --split-per-abi --no-shuffle; then
-              echo "⚠️ Second attempt failed!"
-              
-              if ! flutter build apk --release --split-per-abi --no-pub; then
-                echo "❌ All build attempts failed!"
-                exit 1
-              fi
+              echo "❌ All build attempts failed!"
+              exit 1
             fi
           fi
           
@@ -696,4 +583,4 @@ jobs:
         if: failure()
         run: |
           echo "❌ WEB TO APK FAILED!"
-          echo "📋 Check logs above for the actual error"
+          echo "📋 Check logs above"
