@@ -39,66 +39,90 @@ jobs:
     timeout-minutes: 30
     
     steps:
-      - name: Checkout
+      # ============ STEP 1: CHECKOUT ============
+      - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
 
+      # ============ STEP 2: SETUP FLUTTER ============
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.16.0'
           channel: 'stable'
+          cache: true
 
+      # ============ STEP 3: SETUP JAVA ============
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: gradle
 
+      # ============ STEP 4: SETUP ANDROID SDK ============
       - name: Setup Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools" >> $GITHUB_ENV
+          echo "✅ Android SDK configured"
 
+      # ============ STEP 5: CREATE FLUTTER PROJECT ============
       - name: Create Flutter Project
         id: create_project
         run: |
-          # Clean app name
+          # Clean app name (remove special chars)
           APP_NAME=$(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
           
           echo "📱 Creating Flutter project: $APP_NAME"
           echo "📦 Package: ${{ inputs.package_name }}"
           
-          # Create project
-          flutter create --org $(echo "${{ inputs.package_name }}" | cut -d. -f1,2) \
+          # Create Flutter project
+          flutter create \
+            --org $(echo "${{ inputs.package_name }}" | cut -d. -f1,2) \
             --project-name $APP_NAME \
+            --platforms android \
             app || exit 1
           
-          cd app
+          cd app || exit 1
           
-          # Update package name di semua file
+          # ===== UPDATE PACKAGE NAME =====
           echo "📝 Updating package name to: ${{ inputs.package_name }}"
+          
+          # Update all gradle files
           find . -type f -name "*.gradle" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
-          find . -type f -name "*.xml" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
+          find . -type f -name "*.gradle.kts" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
+          
+          # Update AndroidManifest.xml
+          find . -type f -name "AndroidManifest.xml" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
+          find . -type f -name "AndroidManifest.xml" -exec sed -i "s/MyApp/${{ inputs.app_name }}/g" {} \;
+          
+          # Update kotlin/java files
           find . -type f -name "*.kt" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
           find . -type f -name "*.java" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
           
-          # Update app name di AndroidManifest
-          sed -i "s/MyApp/${{ inputs.app_name }}/g" android/app/src/main/AndroidManifest.xml
+          # Update build.gradle app name
+          sed -i "s/applicationId \".*\"/applicationId \"${{ inputs.package_name }}\"/g" android/app/build.gradle
           
           echo "✅ Flutter project created successfully"
 
-      - name: Download Website (if URL provided)
+      # ============ STEP 6: SETUP WEBVIEW ============
+      - name: Setup WebView for URL
         if: inputs.url != '' && inputs.url != 'null'
         run: |
-          cd app
+          cd app || exit 1
           
           echo "🌐 Setting up WebView for: ${{ inputs.url }}"
           
           # Add webview_flutter dependency
-          flutter pub add webview_flutter || exit 1
-          flutter pub add http || true
+          flutter pub add webview_flutter || {
+            echo "⚠️ webview_flutter add failed, trying alternative method..."
+            flutter pub get || exit 1
+          }
           
           # Create main.dart with WebView
           cat > lib/main.dart << 'EOF'
@@ -140,17 +164,6 @@ jobs:
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
                 ..setBackgroundColor(const Color(0x00000000))
-                ..setNavigationDelegate(
-                  NavigationDelegate(
-                    onProgress: (int progress) {},
-                    onPageStarted: (String url) {},
-                    onPageFinished: (String url) {},
-                    onWebResourceError: (WebResourceError error) {},
-                    onNavigationRequest: (NavigationRequest request) {
-                      return NavigationDecision.navigate;
-                    },
-                  ),
-                )
                 ..loadRequest(Uri.parse('${{ inputs.url }}'));
             }
             
@@ -171,69 +184,116 @@ jobs:
           
           echo "✅ WebView setup complete"
 
-      - name: Download ZIP (if ZIP URL provided)
+      # ============ STEP 7: DOWNLOAD ZIP ============
+      - name: Download ZIP Project
         if: inputs.zip_url != '' && inputs.zip_url != 'null'
         run: |
           echo "📦 Downloading ZIP from: ${{ inputs.zip_url }}"
           
           # Download ZIP
-          curl -L "${{ inputs.zip_url }}" -o project.zip || exit 1
+          curl -L --max-time 60 "${{ inputs.zip_url }}" -o project.zip || exit 1
           
           # Extract ZIP
           mkdir -p temp_project
           unzip -o project.zip -d temp_project/ || exit 1
           
-          # Copy files ke app directory
-          cd app
-          cp -rf ../temp_project/* . 2>/dev/null || true
-          cp -rf ../temp_project/.* . 2>/dev/null || true
+          # Find project root (look for pubspec.yaml)
+          PROJECT_ROOT=$(find temp_project -name "pubspec.yaml" -type f -printf "%h\n" | head -1)
+          
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "❌ pubspec.yaml not found in ZIP!"
+            exit 1
+          fi
+          
+          echo "📁 Project root found: $PROJECT_ROOT"
+          
+          # Copy files to app directory
+          cd app || exit 1
+          rm -rf lib android pubspec.yaml || true
+          cp -rf ../$PROJECT_ROOT/* . 2>/dev/null || true
+          cp -rf ../$PROJECT_ROOT/.* . 2>/dev/null || true
           
           # Clean up
           cd ..
           rm -rf temp_project project.zip
           
-          echo "✅ ZIP extracted"
+          echo "✅ ZIP extracted successfully"
 
+      # ============ STEP 8: DOWNLOAD ICON ============
+      - name: Download Icon
+        if: inputs.icon_url != '' && inputs.icon_url != 'null'
+        run: |
+          echo "🖼️ Downloading icon from: ${{ inputs.icon_url }}"
+          
+          # Install ImageMagick
+          sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+          
+          # Download icon
+          curl -L --max-time 30 "${{ inputs.icon_url }}" -o icon.png || exit 1
+          
+          # Create icon directories
+          cd app/android/app/src/main/res || exit 1
+          
+          mkdir -p mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi
+          
+          # Resize icons
+          convert ../../../../../icon.png -resize 72x72 mipmap-hdpi/ic_launcher.png 2>/dev/null || echo "⚠️ Icon resize warning"
+          convert ../../../../../icon.png -resize 48x48 mipmap-mdpi/ic_launcher.png 2>/dev/null || echo "⚠️ Icon resize warning"
+          convert ../../../../../icon.png -resize 96x96 mipmap-xhdpi/ic_launcher.png 2>/dev/null || echo "⚠️ Icon resize warning"
+          convert ../../../../../icon.png -resize 144x144 mipmap-xxhdpi/ic_launcher.png 2>/dev/null || echo "⚠️ Icon resize warning"
+          convert ../../../../../icon.png -resize 192x192 mipmap-xxxhdpi/ic_launcher.png 2>/dev/null || echo "⚠️ Icon resize warning"
+          
+          # Copy for round icons
+          cp mipmap-hdpi/ic_launcher.png mipmap-hdpi/ic_launcher_round.png 2>/dev/null || true
+          cp mipmap-mdpi/ic_launcher.png mipmap-mdpi/ic_launcher_round.png 2>/dev/null || true
+          cp mipmap-xhdpi/ic_launcher.png mipmap-xhdpi/ic_launcher_round.png 2>/dev/null || true
+          cp mipmap-xxhdpi/ic_launcher.png mipmap-xxhdpi/ic_launcher_round.png 2>/dev/null || true
+          cp mipmap-xxxhdpi/ic_launcher.png mipmap-xxxhdpi/ic_launcher_round.png 2>/dev/null || true
+          
+          cd ../../../..
+          echo "✅ Icon setup complete"
+
+      # ============ STEP 9: INSTALL DEPENDENCIES ============
       - name: Install Dependencies
         id: install_deps
         run: |
-          cd app
+          cd app || exit 1
           
           echo "📦 Installing Flutter dependencies..."
           
-          # Clean first
+          # Clean
           flutter clean || true
           
           # Get packages
-          flutter pub get || exit 1
-          
-          # Verify pubspec.yaml
-          if [ ! -f "pubspec.yaml" ]; then
-            echo "❌ pubspec.yaml not found!"
+          flutter pub get || {
+            echo "❌ flutter pub get failed!"
+            echo "📄 Checking pubspec.yaml:"
+            cat pubspec.yaml || true
             exit 1
-          fi
+          }
           
           echo "✅ Dependencies installed successfully"
 
+      # ============ STEP 10: BUILD APK ============
       - name: Build APK
         id: build_apk
         run: |
-          cd app
+          cd app || exit 1
           
           echo "🔨 Building APK in ${{ inputs.build_mode }} mode..."
           
-          # Build based on mode
+          # Build
           if [ "${{ inputs.build_mode }}" = "debug" ]; then
             flutter build apk --debug || exit 1
           else
             flutter build apk --release || exit 1
           fi
           
-          # Check APK
+          # Verify APK exists
           echo "📂 Checking APK files:"
           ls -la build/app/outputs/flutter-apk/ || true
           
-          # Determine APK path
+          # Find APK
           if [ -f "build/app/outputs/flutter-apk/app-${{ inputs.build_mode }}.apk" ]; then
             echo "APK_PATH=build/app/outputs/flutter-apk/app-${{ inputs.build_mode }}.apk" >> $GITHUB_ENV
             echo "✅ APK found: app-${{ inputs.build_mode }}.apk"
@@ -242,27 +302,32 @@ jobs:
             echo "✅ APK found: app.apk"
           else
             echo "❌ APK not found!"
-            ls -la build/app/outputs/flutter-apk/ || true
+            find build -name "*.apk" -type f || true
             exit 1
           fi
 
+      # ============ STEP 11: UPLOAD APK ============
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: apk-builds
           path: app/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
+          compression-level: 0
           if-no-files-found: error
 
-      - name: Build Success Notification
+      # ============ STEP 12: SUCCESS NOTIFICATION ============
+      - name: Build Success
         if: success()
         run: |
           echo "✅ Build successful!"
           echo "📱 App: ${{ inputs.app_name }}"
           echo "📦 Package: ${{ inputs.package_name }}"
           echo "🔧 Mode: ${{ inputs.build_mode }}"
+          echo "👤 User: ${{ inputs.user_id }}"
 
-      - name: Build Failure Notification
+      # ============ STEP 13: FAILURE NOTIFICATION ============
+      - name: Build Failure
         if: failure()
         run: |
           echo "❌ Build failed!"
