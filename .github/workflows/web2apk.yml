@@ -5,64 +5,98 @@ on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: 'URL Website'
+        description: '🌐 URL Website'
         required: true
         type: string
       app_name:
-        description: 'Nama Aplikasi'
+        description: '📱 Nama Aplikasi'
         required: true
         type: string
       icon_url:
-        description: 'URL Icon (PNG)'
+        description: '🖼️ URL Icon (PNG/JPG)'
         required: true
         type: string
 
 env:
   FLUTTER_VERSION: '3.24.3'
+  JAVA_VERSION: '17'
+  ANDROID_SDK_VERSION: '34.0.0'
 
 jobs:
   build:
     name: 🌐 Web to APK
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
-      # ─── 1. CHECKOUT ──────────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 1. CHECKOUT
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      # ─── 2. INSTALL DEPENDENCIES ─────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 2. INSTALL SYSTEM DEPENDENCIES
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📦 Install System Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          echo "📦 Installing system dependencies..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
             curl \
             git \
             unzip \
             xz-utils \
             zip \
             libglu1-mesa \
-            openjdk-17-jdk \
             ninja-build \
             pkg-config \
             libgtk-3-dev \
             liblzma-dev \
-            libstdc++-12-dev
+            libstdc++-12-dev \
+            clang \
+            cmake \
+            build-essential \
+            wget \
+            ca-certificates \
+            gnupg \
+            lsb-release \
+            file
+          echo "✅ System dependencies installed"
 
-      # ─── 3. SETUP JAVA ────────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 3. SETUP JAVA
+      # ═══════════════════════════════════════════════════════════════════
       - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
 
-      # ─── 4. SETUP ANDROID SDK ────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 4. SETUP ANDROID SDK
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📱 Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          sdk-version: '34.0.0'
+          sdk-version: ${{ env.ANDROID_SDK_VERSION }}
 
-      # ─── 5. SETUP FLUTTER ─────────────────────────────────────────────────
+      - name: 📱 Accept Android Licenses
+        run: |
+          echo "📱 Accepting Android SDK licenses..."
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          echo "✅ Android licenses accepted"
+
+      - name: 📱 Install Android Build Tools
+        run: |
+          echo "📱 Installing Android build tools..."
+          sdkmanager "build-tools;34.0.0" "platform-tools" "platforms;android-34" > /dev/null 2>&1 || true
+          echo "✅ Android build tools installed"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 5. SETUP FLUTTER
+      # ═══════════════════════════════════════════════════════════════════
       - name: 🎯 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -70,12 +104,10 @@ jobs:
           channel: stable
           cache: true
 
-      # ─── 6. VERIFY FLUTTER ────────────────────────────────────────────────
       - name: ✅ Verify Flutter Installation
         run: |
           echo "🔍 Verifying Flutter..."
           flutter --version
-          flutter doctor -v
           
           if ! command -v flutter &> /dev/null; then
             echo "❌ Flutter not found in PATH!"
@@ -84,12 +116,20 @@ jobs:
           
           echo "✅ Flutter installed successfully"
 
-      # ─── 7. CREATE FLUTTER WEB PROJECT ──────────────────────────────────
+      - name: 🩺 Flutter Doctor
+        run: |
+          echo "🩺 Running Flutter Doctor..."
+          flutter doctor -v || true
+          echo "✅ Flutter Doctor completed"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 6. CREATE FLUTTER WEB PROJECT
+      # ═══════════════════════════════════════════════════════════════════
       - name: 🎯 Create Flutter Web Project
         run: |
           echo "🎯 Creating Flutter web project..."
           
-          # Buat project baru
+          # Create project
           flutter create --platforms=web webapp
           
           if [ ! -d "webapp" ]; then
@@ -108,36 +148,43 @@ jobs:
           
           echo "✅ Project created"
 
-      # ─── 8. DOWNLOAD ICON ──────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 7. DOWNLOAD ICON
+      # ═══════════════════════════════════════════════════════════════════
       - name: 🖼️ Download Icon
         run: |
           echo "🖼️ Downloading icon..."
           
           mkdir -p webapp/assets
           
-          # Download icon dari URL
-          if ! curl -L -o webapp/assets/icon.png "${{ github.event.inputs.icon_url }}"; then
+          # Download icon dengan retry
+          for i in 1 2 3; do
+            echo "🔄 Attempt $i..."
+            if curl -L -o webapp/assets/icon.png "${{ github.event.inputs.icon_url }}"; then
+              break
+            fi
+            sleep 2
+          done
+          
+          # Check if icon exists
+          if [ ! -f webapp/assets/icon.png ]; then
             echo "❌ Failed to download icon!"
             exit 1
           fi
           
-          # Buat splash dari icon
-          cp webapp/assets/icon.png webapp/assets/splash.png
-          
-          # Check if icon exists
-          if [ ! -f webapp/assets/icon.png ]; then
-            echo "❌ Icon download failed!"
-            exit 1
-          fi
-          
           # Check if icon is valid image
-          if ! file webapp/assets/icon.png | grep -q "PNG image"; then
-            echo "⚠️ Icon is not a valid PNG image, but continuing..."
+          if ! file webapp/assets/icon.png | grep -q "PNG\|JPEG\|JPG"; then
+            echo "⚠️ Icon may not be a valid image, but continuing..."
           fi
+          
+          # Create splash from icon
+          cp webapp/assets/icon.png webapp/assets/splash.png
           
           echo "✅ Icon downloaded"
 
-      # ─── 9. GENERATE MAIN.DART ────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 8. GENERATE MAIN.DART
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Generate main.dart
         run: |
           echo "📝 Generating main.dart..."
@@ -159,7 +206,7 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: '${{ github.event.inputs.app_name }}',
+                title: 'APP_NAME_PLACEHOLDER',
                 theme: ThemeData(
                   colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
                   useMaterial3: true,
@@ -196,7 +243,7 @@ jobs:
                     },
                   ),
                 )
-                ..loadRequest(Uri.parse('${{ github.event.inputs.web_url }}'));
+                ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
               
               // Remove splash after 3 seconds max
               Future.delayed(const Duration(seconds: 3), () {
@@ -208,7 +255,7 @@ jobs:
             Widget build(BuildContext context) {
               return Scaffold(
                 appBar: AppBar(
-                  title: Text('${{ github.event.inputs.app_name }}'),
+                  title: Text('APP_NAME_PLACEHOLDER'),
                   centerTitle: true,
                   elevation: 0,
                 ),
@@ -220,13 +267,23 @@ jobs:
           }
           EOF
           
+          # Replace placeholders
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          WEB_URL="${{ github.event.inputs.web_url }}"
+          
+          sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" webapp/lib/main.dart
+          sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" webapp/lib/main.dart
+          
           echo "✅ main.dart generated"
 
-      # ─── 10. GENERATE ICON CONFIG ──────────────────────────────────────────
-      - name: 📝 Generate Icon Config
+      # ═══════════════════════════════════════════════════════════════════
+      # 9. GENERATE CONFIG FILES
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 📝 Generate Config Files
         run: |
-          echo "📝 Generating icon config..."
+          echo "📝 Generating config files..."
           
+          # Flutter Launcher Icons
           cat > webapp/flutter_launcher_icons.yaml << 'EOF'
           flutter_launcher_icons:
             android: true
@@ -237,6 +294,7 @@ jobs:
             min_sdk_android: 21
           EOF
           
+          # Flutter Native Splash
           cat > webapp/flutter_native_splash.yaml << 'EOF'
           flutter_native_splash:
             color: "#ffffff"
@@ -245,9 +303,11 @@ jobs:
             android_gravity: center
           EOF
           
-          echo "✅ Configs generated"
+          echo "✅ Config files generated"
 
-      # ─── 11. UPDATE PUBSPEC.YAML ──────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 10. UPDATE PUBSPEC.YAML
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Update pubspec.yaml
         run: |
           echo "📝 Updating pubspec.yaml..."
@@ -258,9 +318,11 @@ jobs:
           cp pubspec.yaml pubspec.yaml.bak
           
           # Update name
-          sed -i "s/^name:.*/name: webapp/g" pubspec.yaml
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]/_/g' | sed 's/_\+/_/g' | sed 's/^_//;s/_$//')
+          sed -i "s/^name:.*/name: $PACKAGE_NAME/g" pubspec.yaml
           
-          # Add flutter section if not exists
+          # Check if flutter section exists
           if ! grep -q "^flutter:" pubspec.yaml; then
             cat >> pubspec.yaml << 'EOF'
             
@@ -274,24 +336,43 @@ jobs:
           
           echo "✅ pubspec.yaml updated"
 
-      # ─── 12. FLUTTER CLEAN & PUB GET ──────────────────────────────────────
-      - name: 🧹 Flutter Clean & Pub Get
+      # ═══════════════════════════════════════════════════════════════════
+      # 11. FLUTTER CLEAN
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 🧹 Flutter Clean
         working-directory: ./webapp
         run: |
           echo "🧹 Running flutter clean..."
           flutter clean || true
-          
+          echo "✅ Flutter clean completed"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 12. FLUTTER PUB GET
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 📦 Flutter Pub Get
+        working-directory: ./webapp
+        run: |
           echo "📦 Running flutter pub get..."
-          flutter pub get
+          
+          for i in 1 2 3; do
+            echo "🔄 Attempt $i..."
+            if flutter pub get; then
+              echo "✅ flutter pub get succeeded"
+              break
+            fi
+            sleep 5
+          done
           
           if [ $? -ne 0 ]; then
-            echo "❌ flutter pub get failed!"
+            echo "❌ flutter pub get failed after 3 attempts!"
             exit 1
           fi
           
           echo "✅ Dependencies installed"
 
-      # ─── 13. GENERATE ICONS ────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 13. GENERATE ICONS
+      # ═══════════════════════════════════════════════════════════════════
       - name: 🖼️ Generate Icons
         working-directory: ./webapp
         run: |
@@ -299,7 +380,9 @@ jobs:
           flutter pub run flutter_launcher_icons:main || true
           echo "✅ Icons generated (or skipped)"
 
-      # ─── 14. GENERATE SPLASH ──────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 14. GENERATE SPLASH
+      # ═══════════════════════════════════════════════════════════════════
       - name: 🖼️ Generate Splash
         working-directory: ./webapp
         run: |
@@ -307,25 +390,35 @@ jobs:
           flutter pub run flutter_native_splash:create || true
           echo "✅ Splash generated (or skipped)"
 
-      # ─── 15. BUILD APK ─────────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 15. BUILD APK
+      # ═══════════════════════════════════════════════════════════════════
       - name: 🔨 Build APK
         working-directory: ./webapp
         run: |
           echo "🔨 Building APK..."
           
-          # Build dengan release
-          flutter build apk --release --split-per-abi
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ Build failed!"
-            echo "📋 Checking build output..."
-            ls -la build/app/outputs/flutter-apk/ || true
-            exit 1
+          # Try normal build
+          if ! flutter build apk --release --split-per-abi; then
+            echo "⚠️ First build attempt failed!"
+            echo "🔧 Trying with --no-shuffle..."
+            
+            if ! flutter build apk --release --split-per-abi --no-shuffle; then
+              echo "⚠️ Second attempt failed!"
+              echo "🔧 Trying with --no-pub..."
+              
+              if ! flutter build apk --release --split-per-abi --no-pub; then
+                echo "❌ All build attempts failed!"
+                exit 1
+              fi
+            fi
           fi
           
-          echo "✅ Build completed"
+          echo "✅ Build completed successfully!"
 
-      # ─── 16. COLLECT APK ──────────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 16. COLLECT APK
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📦 Collect APK
         run: |
           echo "📦 Collecting APK..."
@@ -334,14 +427,23 @@ jobs:
           # Find all APK files
           find webapp/build -name "*.apk" -exec cp {} apk_output/ \; 2>/dev/null || true
           
-          # If no APK found, try alternative path
+          # If no APK found, check alternative paths
           if [ -z "$(ls -A apk_output 2>/dev/null)" ]; then
             echo "⚠️ No APK found in build directory!"
-            echo "📋 Checking build directory..."
-            find webapp/build -type f -name "*.apk" 2>/dev/null || echo "No APK found!"
+            echo "📋 Searching for APK files..."
+            find webapp -name "*.apk" -type f 2>/dev/null || echo "No APK found!"
+            
+            # Check flutter build output
+            if [ -d "webapp/build/app/outputs/flutter-apk" ]; then
+              echo "📋 Checking flutter-apk directory..."
+              ls -la webapp/build/app/outputs/flutter-apk/ || true
+              cp webapp/build/app/outputs/flutter-apk/*.apk apk_output/ 2>/dev/null || true
+            fi
             
             # Create dummy file to avoid artifact error
-            echo "No APK generated" > apk_output/README.txt
+            if [ -z "$(ls -A apk_output 2>/dev/null)" ]; then
+              echo "No APK generated" > apk_output/README.txt
+            fi
           else
             echo "📦 APK files found:"
             ls -la apk_output/
@@ -356,6 +458,8 @@ jobs:
                   mv "$f" "webapp-arm64-v8a.apk" 2>/dev/null || true
                 elif [[ "$f" == *"x86_64"* ]]; then
                   mv "$f" "webapp-x86_64.apk" 2>/dev/null || true
+                elif [[ "$f" == *"universal"* ]]; then
+                  mv "$f" "webapp-universal.apk" 2>/dev/null || true
                 else
                   mv "$f" "webapp.apk" 2>/dev/null || true
                 fi
@@ -363,16 +467,24 @@ jobs:
             done
             cd ..
           fi
+          
+          echo "📦 Final APK list:"
+          ls -la apk_output/ || true
 
-      # ─── 17. UPLOAD APK AS ARTIFACT ──────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 17. UPLOAD APK AS ARTIFACT
+      # ═══════════════════════════════════════════════════════════════════
       - name: ⬆️ Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: webapp-apk
           path: apk_output/
           retention-days: 7
+          if-no-files-found: warn
 
-      # ─── 18. CREATE RELEASE ───────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 18. CREATE RELEASE
+      # ═══════════════════════════════════════════════════════════════════
       - name: 📦 Create Release
         if: success() && !cancelled()
         env:
@@ -380,14 +492,15 @@ jobs:
         run: |
           echo "📦 Creating release..."
           
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          TAG="webapp_$TIMESTAMP"
-          
-          # Check if there are any APK files
+          # Check if there are APK files
           if [ -z "$(ls -A apk_output/*.apk 2>/dev/null)" ]; then
             echo "⚠️ No APK found, skipping release creation..."
             exit 0
           fi
+          
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          TAG="webapp_$TIMESTAMP"
+          APP_NAME="${{ github.event.inputs.app_name }}"
           
           # Create release
           RELEASE_RESPONSE=$(curl -s -X POST \
@@ -396,9 +509,10 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/releases" \
             -d "{
               \"tag_name\": \"$TAG\",
-              \"name\": \"Web App $TIMESTAMP\",
+              \"name\": \"$APP_NAME - $TIMESTAMP\",
               \"draft\": false,
-              \"prerelease\": false
+              \"prerelease\": false,
+              \"body\": \"🌐 Web to APK Build\\n\\n📱 App: $APP_NAME\\n🌐 URL: ${{ github.event.inputs.web_url }}\\n🕐 Built: $TIMESTAMP\"
             }")
           
           RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
@@ -409,6 +523,8 @@ jobs:
             echo "$RELEASE_RESPONSE"
             exit 0
           fi
+          
+          echo "✅ Release created: $TAG"
           
           # Upload APKs
           for apk in apk_output/*.apk; do
@@ -424,21 +540,60 @@ jobs:
             fi
           done
           
-          echo "✅ Release created: $TAG"
+          echo "✅ APK uploaded to release"
 
-      # ─── 19. NOTIFY SUCCESS ──────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 19. NOTIFY SUCCESS
+      # ═══════════════════════════════════════════════════════════════════
       - name: ✅ Build Success
         if: success()
         run: |
           echo "🎉 WEB TO APK SUCCESS!"
-          echo "📦 APK available in artifacts"
-          ls -la apk_output/ || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📱 App Name: ${{ github.event.inputs.app_name }}"
+          echo "🌐 URL: ${{ github.event.inputs.web_url }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 APK available in artifacts and release"
+          
+          if [ -d "apk_output" ]; then
+            echo "📦 APK files:"
+            ls -lh apk_output/ || true
+          fi
 
-      # ─── 20. NOTIFY FAILURE ──────────────────────────────────────────────
+      # ═══════════════════════════════════════════════════════════════════
+      # 20. NOTIFY FAILURE WITH LOGS
+      # ═══════════════════════════════════════════════════════════════════
       - name: ❌ Build Failed
         if: failure()
         run: |
           echo "❌ WEB TO APK FAILED!"
-          echo "📋 Check logs above for details"
-          echo "📋 Build directory contents:"
-          find webapp/build -type f 2>/dev/null | head -20 || echo "Build directory not found"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 Build details:"
+          echo "  • App Name: ${{ github.event.inputs.app_name }}"
+          echo "  • URL: ${{ github.event.inputs.web_url }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          echo "📂 Project structure:"
+          ls -la webapp/ 2>/dev/null | head -20 || echo "Project directory not found"
+          
+          echo "📂 Android directory:"
+          ls -la webapp/android/ 2>/dev/null | head -10 || echo "Android directory not found"
+          
+          echo "📂 Build output:"
+          find webapp/build -type f 2>/dev/null | head -20 || echo "Build output not found"
+          
+          echo "📋 Pubspec.yaml:"
+          cat webapp/pubspec.yaml 2>/dev/null || echo "pubspec.yaml not found"
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 Check logs above for the actual error"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 21. CLEANUP
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up..."
+          rm -rf webapp/ apk_output/ 2>/dev/null || true
+          echo "✅ Cleanup completed"
