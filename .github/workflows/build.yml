@@ -36,7 +36,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     
     steps:
       - name: Checkout
@@ -55,28 +55,39 @@ jobs:
           java-version: '17'
 
       - name: Create Flutter Project
+        id: create_project
         run: |
+          APP_NAME=$(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+          
           flutter create --org $(echo "${{ inputs.package_name }}" | cut -d. -f1,2) \
-            --project-name $(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]') \
-            app
+            --project-name $APP_NAME \
+            app || exit 1
+          
           cd app
           
-          # Update package name
-          sed -i "s/com.example.app/${{ inputs.package_name }}/g" android/app/build.gradle
-          sed -i "s/com.example.app/${{ inputs.package_name }}/g" android/app/src/main/AndroidManifest.xml
-          sed -i "s/package=\"com.example.app\"/package=\"${{ inputs.package_name }}\"/g" android/app/src/main/AndroidManifest.xml
+          # Update package name di semua file
+          find . -type f -name "*.gradle" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
+          find . -type f -name "*.xml" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
+          find . -type f -name "*.kt" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
+          find . -type f -name "*.java" -exec sed -i "s/com.example.app/${{ inputs.package_name }}/g" {} \;
           
           # Update app name
           sed -i "s/MyApp/${{ inputs.app_name }}/g" android/app/src/main/AndroidManifest.xml
+          
+          echo "✅ Flutter project created"
 
       - name: Download Website (if URL provided)
-        if: inputs.url != ''
+        if: inputs.url != '' && inputs.url != 'null'
         run: |
-          cd app/lib
-          # Download website content
-          curl -L "${{ inputs.url }}" -o index.html
-          # Create main.dart with webview
-          cat > main.dart << 'EOF'
+          cd app
+          
+          # Add webview_flutter dependency
+          flutter pub add webview_flutter
+          flutter pub add http
+          
+          # Create main.dart with WebView
+          cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
           
@@ -89,7 +100,10 @@ jobs:
             Widget build(BuildContext context) {
               return MaterialApp(
                 title: '${{ inputs.app_name }}',
-                theme: ThemeData(primarySwatch: Colors.blue),
+                theme: ThemeData(
+                  primarySwatch: Colors.blue,
+                  useMaterial3: true,
+                ),
                 home: const WebViewScreen(),
                 debugShowCheckedModeBanner: false,
               );
@@ -111,6 +125,20 @@ jobs:
               super.initState();
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setBackgroundColor(const Color(0x00000000))
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onProgress: (int progress) {
+                      // Update progress jika perlu
+                    },
+                    onPageStarted: (String url) {},
+                    onPageFinished: (String url) {},
+                    onWebResourceError: (WebResourceError error) {},
+                    onNavigationRequest: (NavigationRequest request) {
+                      return NavigationDecision.navigate;
+                    },
+                  ),
+                )
                 ..loadRequest(Uri.parse('${{ inputs.url }}'));
             }
             
@@ -121,6 +149,7 @@ jobs:
                   title: Text('${{ inputs.app_name }}'),
                   backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,
+                  elevation: 0,
                 ),
                 body: WebViewWidget(controller: controller),
               );
@@ -128,46 +157,106 @@ jobs:
           }
           EOF
           
-          # Update pubspec.yaml
-          cd ..
-          echo "  webview_flutter: ^4.4.2" >> pubspec.yaml
+          # Update pubspec.yaml untuk assets jika perlu
+          echo "✅ WebView setup complete"
 
       - name: Download ZIP (if ZIP URL provided)
-        if: inputs.zip_url != ''
+        if: inputs.zip_url != '' && inputs.zip_url != 'null'
         run: |
-          curl -L "${{ inputs.zip_url }}" -o project.zip
-          unzip -o project.zip -d temp_project
-          # Copy files to app folder
-          cp -r temp_project/* app/ || true
-          cp -r temp_project/.??* app/ || true
+          echo "📦 Downloading ZIP from: ${{ inputs.zip_url }}"
+          
+          # Download ZIP
+          curl -L "${{ inputs.zip_url }}" -o project.zip || exit 1
+          
+          # Extract ZIP
+          mkdir -p temp_project
+          unzip -o project.zip -d temp_project/ || exit 1
+          
+          # Copy files ke app directory
+          cd app
+          cp -rf ../temp_project/* . || true
+          cp -rf ../temp_project/.* . || true
+          
+          # Clean up
+          cd ..
+          rm -rf temp_project project.zip
+          
+          echo "✅ ZIP extracted to app directory"
 
       - name: Download Icon (if URL provided)
-        if: inputs.icon_url != ''
+        if: inputs.icon_url != '' && inputs.icon_url != 'null'
         run: |
-          cd app/android/app/src/main/res
-          mkdir -p mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi
-          curl -L "${{ inputs.icon_url }}" -o icon.png
+          echo "🖼️ Downloading icon from: ${{ inputs.icon_url }}"
           
-          # Resize icons
-          convert icon.png -resize 72x72 mipmap-hdpi/ic_launcher.png
-          convert icon.png -resize 48x48 mipmap-mdpi/ic_launcher.png
-          convert icon.png -resize 96x96 mipmap-xhdpi/ic_launcher.png
-          convert icon.png -resize 144x144 mipmap-xxhdpi/ic_launcher.png
-          convert icon.png -resize 192x192 mipmap-xxxhdpi/ic_launcher.png
+          # Download icon
+          curl -L "${{ inputs.icon_url }}" -o icon.png || exit 1
+          
+          # Resize dan simpan ke berbagai resolusi
+          cd app/android/app/src/main/res
+          
+          # Create directories if not exist
+          mkdir -p mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi
+          
+          # Resize icons menggunakan ImageMagick
+          convert ../../../../../icon.png -resize 72x72 mipmap-hdpi/ic_launcher.png 2>/dev/null || true
+          convert ../../../../../icon.png -resize 48x48 mipmap-mdpi/ic_launcher.png 2>/dev/null || true
+          convert ../../../../../icon.png -resize 96x96 mipmap-xhdpi/ic_launcher.png 2>/dev/null || true
+          convert ../../../../../icon.png -resize 144x144 mipmap-xxhdpi/ic_launcher.png 2>/dev/null || true
+          convert ../../../../../icon.png -resize 192x192 mipmap-xxxhdpi/ic_launcher.png 2>/dev/null || true
+          
+          # Copy untuk round icon
+          cp mipmap-hdpi/ic_launcher.png mipmap-hdpi/ic_launcher_round.png 2>/dev/null || true
+          cp mipmap-mdpi/ic_launcher.png mipmap-mdpi/ic_launcher_round.png 2>/dev/null || true
+          cp mipmap-xhdpi/ic_launcher.png mipmap-xhdpi/ic_launcher_round.png 2>/dev/null || true
+          cp mipmap-xxhdpi/ic_launcher.png mipmap-xxhdpi/ic_launcher_round.png 2>/dev/null || true
+          cp mipmap-xxxhdpi/ic_launcher.png mipmap-xxxhdpi/ic_launcher_round.png 2>/dev/null || true
+          
+          cd ../../../..
+          echo "✅ Icon resized and placed"
 
-      - name: Add Dependencies
+      - name: Install Dependencies
+        id: install_deps
         run: |
           cd app
-          flutter pub add webview_flutter
-          flutter pub add http
+          
+          echo "📦 Installing Flutter dependencies..."
+          
+          # Clean dan get packages
+          flutter clean || true
+          flutter pub get || exit 1
+          
+          # Cek pubspec.yaml
+          if [ ! -f "pubspec.yaml" ]; then
+            echo "❌ pubspec.yaml not found!"
+            exit 1
+          fi
+          
+          echo "📦 Dependencies installed successfully"
 
       - name: Build APK
+        id: build_apk
         run: |
           cd app
+          
+          echo "🔨 Building APK in ${{ inputs.build_mode }} mode..."
+          
           if [ "${{ inputs.build_mode }}" = "debug" ]; then
-            flutter build apk --debug
+            flutter build apk --debug || exit 1
           else
-            flutter build apk --release
+            flutter build apk --release || exit 1
+          fi
+          
+          # Cek apakah APK berhasil dibuat
+          if [ -f "build/app/outputs/flutter-apk/app-${{ inputs.build_mode }}.apk" ]; then
+            echo "✅ APK built successfully: app-${{ inputs.build_mode }}.apk"
+            echo "APK_PATH=build/app/outputs/flutter-apk/app-${{ inputs.build_mode }}.apk" >> $GITHUB_ENV
+          elif [ -f "build/app/outputs/flutter-apk/app.apk" ]; then
+            echo "✅ APK built successfully: app.apk"
+            echo "APK_PATH=build/app/outputs/flutter-apk/app.apk" >> $GITHUB_ENV
+          else
+            echo "❌ APK not found!"
+            ls -la build/app/outputs/flutter-apk/ || true
+            exit 1
           fi
 
       - name: Upload APK
@@ -176,3 +265,21 @@ jobs:
           name: apk-builds
           path: app/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
+          if-no-files-found: error
+
+      - name: Build Success Notification
+        if: success()
+        run: |
+          echo "✅ Build successful!"
+          echo "📱 App: ${{ inputs.app_name }}"
+          echo "📦 Package: ${{ inputs.package_name }}"
+          echo "🔧 Mode: ${{ inputs.build_mode }}"
+          echo "👤 User: ${{ inputs.user_id }}"
+
+      - name: Build Failure Notification
+        if: failure()
+        run: |
+          echo "❌ Build failed!"
+          echo "📱 App: ${{ inputs.app_name }}"
+          echo "👤 User: ${{ inputs.user_id }}"
+          echo "🔍 Check logs above for details"
