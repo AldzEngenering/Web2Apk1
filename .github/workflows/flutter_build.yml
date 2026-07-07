@@ -1,0 +1,228 @@
+# .github/workflows/flutter_build.yml
+name: 🚀 Flutter APK Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release Tag'
+        required: true
+        type: string
+      build_type:
+        description: 'Tipe Build'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - debug
+          - release
+      release_url:
+        description: 'URL Release'
+        required: true
+        type: string
+
+env:
+  FLUTTER_VERSION: '3.24.3-stable'
+  JAVA_VERSION: '17'
+  ANDROID_SDK_VERSION: '34.0.0'
+
+jobs:
+  build:
+    name: 🔨 Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ─── 1. CHECKOUT ──────────────────────────────────────────────────────
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      # ─── 2. DOWNLOAD PROJECT ZIP ─────────────────────────────────────────
+      - name: 📦 Download Project ZIP
+        run: |
+          echo "📦 Downloading project from release..."
+          curl -L -o project.zip \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "${{ github.event.inputs.release_url }}"
+          
+          if [ ! -f project.zip ]; then
+            echo "❌ Gagal download project.zip"
+            exit 1
+          fi
+          
+          echo "✅ Project downloaded: $(ls -lh project.zip)"
+
+      # ─── 3. EXTRACT PROJECT ──────────────────────────────────────────────
+      - name: 📂 Extract Project
+        run: |
+          echo "📂 Extracting project..."
+          mkdir -p project
+          unzip -q project.zip -d project/
+          rm -f project.zip
+          
+          echo "📂 Project contents:"
+          ls -la project/
+
+      # ─── 4. SETUP JAVA ────────────────────────────────────────────────────
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      # ─── 5. SETUP ANDROID SDK ────────────────────────────────────────────
+      - name: 📱 Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          sdk-version: ${{ env.ANDROID_SDK_VERSION }}
+
+      # ─── 6. SETUP FLUTTER ─────────────────────────────────────────────────
+      - name: 🎯 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # ─── 7. FLUTTER CLEAN & PUB GET ──────────────────────────────────────
+      - name: 🧹 Flutter Clean & Pub Get
+        working-directory: ./project
+        run: |
+          echo "🧹 Running flutter clean..."
+          flutter clean || true
+          
+          echo "📦 Running flutter pub get..."
+          flutter pub get
+          
+          echo "✅ Flutter dependencies installed"
+
+      # ─── 8. VALIDATE PROJECT ─────────────────────────────────────────────
+      - name: ✅ Validate Project
+        working-directory: ./project
+        run: |
+          echo "🔍 Validating project..."
+          
+          if [ ! -f pubspec.yaml ]; then
+            echo "❌ pubspec.yaml not found!"
+            exit 1
+          fi
+          
+          echo "✅ Project valid"
+
+      # ─── 9. BUILD APK ─────────────────────────────────────────────────────
+      - name: 🔨 Build APK (${{ github.event.inputs.build_type }})
+        working-directory: ./project
+        run: |
+          echo "🔨 Building APK..."
+          
+          if [ "${{ github.event.inputs.build_type }}" = "debug" ]; then
+            flutter build apk --debug --split-per-abi
+          else
+            flutter build apk --release --split-per-abi
+          fi
+          
+          echo "✅ Build completed"
+
+      # ─── 10. COLLECT APK FILES ────────────────────────────────────────────
+      - name: 📦 Collect APK Files
+        run: |
+          echo "📦 Collecting APK files..."
+          mkdir -p apk_output
+          
+          # Cari semua APK
+          find project/build -name "*.apk" -exec cp {} apk_output/ \;
+          
+          # Rename untuk clarity
+          cd apk_output
+          for f in *.apk; do
+            if [[ "$f" == *"armeabi-v7a"* ]]; then
+              mv "$f" "app-armeabi-v7a-${{ github.event.inputs.build_type }}.apk"
+            elif [[ "$f" == *"arm64-v8a"* ]]; then
+              mv "$f" "app-arm64-v8a-${{ github.event.inputs.build_type }}.apk"
+            elif [[ "$f" == *"x86_64"* ]]; then
+              mv "$f" "app-x86_64-${{ github.event.inputs.build_type }}.apk"
+            else
+              mv "$f" "app-${{ github.event.inputs.build_type }}.apk"
+            fi
+          done
+          cd ..
+          
+          echo "📦 APK files:"
+          ls -la apk_output/
+
+      # ─── 11. UPLOAD APK AS ARTIFACT ──────────────────────────────────────
+      - name: ⬆️ Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.event.inputs.build_type }}
+          path: apk_output/
+          retention-days: 7
+
+      # ─── 12. UPLOAD APK TO RELEASE ────────────────────────────────────────
+      - name: ⬆️ Upload APK to Release
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "⬆️ Uploading APK to release..."
+          
+          RELEASE_ID=$(curl -s \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.inputs.tag }}" \
+            | jq -r '.id')
+          
+          if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
+            echo "⚠️ Release not found, creating new..."
+            
+            # Create release
+            RELEASE_RESPONSE=$(curl -s -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases" \
+              -d "{
+                \"tag_name\": \"${{ github.event.inputs.tag }}\",
+                \"name\": \"Build ${{ github.event.inputs.tag }}\",
+                \"draft\": false,
+                \"prerelease\": false
+              }")
+            
+            RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+            UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url')
+          else
+            UPLOAD_URL=$(curl -s \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID" \
+              | jq -r '.upload_url')
+          fi
+          
+          # Upload each APK
+          for apk in apk_output/*.apk; do
+            if [ -f "$apk" ]; then
+              filename=$(basename "$apk")
+              echo "⬆️ Uploading $filename..."
+              
+              curl -s -X POST \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Content-Type: application/vnd.android.package-archive" \
+                --data-binary @"$apk" \
+                "${UPLOAD_URL%\{?name,label\}}?name=$filename"
+            fi
+          done
+          
+          echo "✅ APK uploaded to release"
+
+      # ─── 13. NOTIFY SUCCESS ────────────────────────────────────────────────
+      - name: ✅ Build Success
+        if: success()
+        run: |
+          echo "🎉 BUILD SUCCESS!"
+          echo "📦 APK available in artifacts and release"
+
+      # ─── 14. NOTIFY FAILURE ───────────────────────────────────────────────
+      - name: ❌ Build Failed
+        if: failure()
+        run: |
+          echo "❌ BUILD FAILED!"
+          echo "📋 Check logs above for details"

@@ -1,0 +1,341 @@
+# .github/workflows/web2apk.yml
+name: 🌐 Web to APK Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      web_url:
+        description: 'URL Website'
+        required: true
+        type: string
+      app_name:
+        description: 'Nama Aplikasi'
+        required: true
+        type: string
+      icon_url:
+        description: 'URL Icon (PNG)'
+        required: true
+        type: string
+
+env:
+  FLUTTER_VERSION: '3.24.3-stable'
+  JAVA_VERSION: '17'
+  ANDROID_SDK_VERSION: '34.0.0'
+
+jobs:
+  build:
+    name: 🌐 Web to APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      # ─── 1. CHECKOUT ──────────────────────────────────────────────────────
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      # ─── 2. CREATE FLUTTER WEB PROJECT ──────────────────────────────────
+      - name: 🎯 Create Flutter Web Project
+        run: |
+          echo "🎯 Creating Flutter web project..."
+          
+          # Buat project baru
+          flutter create --platforms=web webapp
+          cd webapp
+          
+          # Install dependencies
+          flutter pub add webview_flutter
+          flutter pub add webview_flutter_plus
+          flutter pub add flutter_native_splash
+          flutter pub add flutter_launcher_icons
+          
+          # Setup launcher icons
+          cat > flutter_launcher_icons.yaml << EOF
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/icon.png"
+            adaptive_icon_background: "#ffffff"
+            adaptive_icon_foreground: "assets/icon.png"
+            min_sdk_android: 21
+          EOF
+          
+          # Setup native splash
+          cat > flutter_native_splash.yaml << EOF
+          flutter_native_splash:
+            color: "#ffffff"
+            image: assets/splash.png
+            android: true
+            android_gravity: center
+          EOF
+          
+          echo "✅ Project created"
+
+      # ─── 3. DOWNLOAD ICON ──────────────────────────────────────────────────
+      - name: 🖼️ Download Icon
+        run: |
+          echo "🖼️ Downloading icon..."
+          
+          mkdir -p webapp/assets
+          
+          # Download icon dari URL
+          curl -L -o webapp/assets/icon.png "${{ github.event.inputs.icon_url }}"
+          
+          # Buat splash dari icon
+          cp webapp/assets/icon.png webapp/assets/splash.png
+          
+          # Check if icon exists
+          if [ ! -f webapp/assets/icon.png ]; then
+            echo "❌ Gagal download icon"
+            exit 1
+          fi
+          
+          echo "✅ Icon downloaded"
+
+      # ─── 4. GENERATE MAIN.DART ────────────────────────────────────────────
+      - name: 📝 Generate main.dart
+        run: |
+          cat > webapp/lib/main.dart << 'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+          import 'package:flutter_native_splash/flutter_native_splash.dart';
+
+          void main() {
+            WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+            FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+            runApp(const MyApp());
+          }
+
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: '${{ github.event.inputs.app_name }}',
+                theme: ThemeData(
+                  colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+                  useMaterial3: true,
+                ),
+                home: const WebViewScreen(),
+              );
+            }
+          }
+
+          class WebViewScreen extends StatefulWidget {
+            const WebViewScreen({super.key});
+
+            @override
+            State<WebViewScreen> createState() => _WebViewScreenState();
+          }
+
+          class _WebViewScreenState extends State<WebViewScreen> {
+            late final WebViewController _controller;
+
+            @override
+            void initState() {
+              super.initState();
+              
+              _controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setBackgroundColor(const Color(0x00000000))
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onPageFinished: (String url) {
+                      FlutterNativeSplash.remove();
+                    },
+                    onWebResourceError: (WebResourceError error) {
+                      FlutterNativeSplash.remove();
+                    },
+                  ),
+                )
+                ..loadRequest(Uri.parse('${{ github.event.inputs.web_url }}'));
+              
+              // Remove splash after 3 seconds max
+              Future.delayed(const Duration(seconds: 3), () {
+                FlutterNativeSplash.remove();
+              });
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: Text('${{ github.event.inputs.app_name }}'),
+                  centerTitle: true,
+                  elevation: 0,
+                ),
+                body: SafeArea(
+                  child: WebViewWidget(controller: _controller),
+                ),
+              );
+            }
+          }
+          EOF
+          
+          echo "✅ main.dart generated"
+
+      # ─── 5. UPDATE PUBSPEC.YAML ────────────────────────────────────────────
+      - name: 📝 Update pubspec.yaml
+        run: |
+          cd webapp
+          
+          # Update name
+          sed -i "s/^name:.*/name: webapp/g" pubspec.yaml
+          
+          # Add assets
+          cat >> pubspec.yaml << 'EOF'
+
+          flutter:
+            uses-material-design: true
+            assets:
+              - assets/icon.png
+              - assets/splash.png
+          EOF
+          
+          echo "✅ pubspec.yaml updated"
+
+      # ─── 6. SETUP JAVA ────────────────────────────────────────────────────
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      # ─── 7. SETUP ANDROID SDK ────────────────────────────────────────────
+      - name: 📱 Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          sdk-version: ${{ env.ANDROID_SDK_VERSION }}
+
+      # ─── 8. SETUP FLUTTER ─────────────────────────────────────────────────
+      - name: 🎯 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # ─── 9. FLUTTER CLEAN & PUB GET ──────────────────────────────────────
+      - name: 🧹 Flutter Clean & Pub Get
+        working-directory: ./webapp
+        run: |
+          echo "🧹 Running flutter clean..."
+          flutter clean || true
+          
+          echo "📦 Running flutter pub get..."
+          flutter pub get
+          
+          echo "✅ Dependencies installed"
+
+      # ─── 10. GENERATE ICONS ────────────────────────────────────────────────
+      - name: 🖼️ Generate Icons
+        working-directory: ./webapp
+        run: |
+          echo "🖼️ Generating icons..."
+          flutter pub run flutter_launcher_icons:main
+          echo "✅ Icons generated"
+
+      # ─── 11. GENERATE SPLASH ──────────────────────────────────────────────
+      - name: 🖼️ Generate Splash
+        working-directory: ./webapp
+        run: |
+          echo "🖼️ Generating splash..."
+          flutter pub run flutter_native_splash:create
+          echo "✅ Splash generated"
+
+      # ─── 12. BUILD APK ─────────────────────────────────────────────────────
+      - name: 🔨 Build APK
+        working-directory: ./webapp
+        run: |
+          echo "🔨 Building APK..."
+          flutter build apk --release --split-per-abi
+          echo "✅ Build completed"
+
+      # ─── 13. COLLECT APK ──────────────────────────────────────────────────
+      - name: 📦 Collect APK
+        run: |
+          echo "📦 Collecting APK..."
+          mkdir -p apk_output
+          
+          find webapp/build -name "*.apk" -exec cp {} apk_output/ \;
+          
+          cd apk_output
+          for f in *.apk; do
+            if [[ "$f" == *"armeabi-v7a"* ]]; then
+              mv "$f" "webapp-armeabi-v7a.apk"
+            elif [[ "$f" == *"arm64-v8a"* ]]; then
+              mv "$f" "webapp-arm64-v8a.apk"
+            elif [[ "$f" == *"x86_64"* ]]; then
+              mv "$f" "webapp-x86_64.apk"
+            else
+              mv "$f" "webapp.apk"
+            fi
+          done
+          cd ..
+          
+          echo "📦 APK files:"
+          ls -la apk_output/
+
+      # ─── 14. UPLOAD APK AS ARTIFACT ──────────────────────────────────────
+      - name: ⬆️ Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webapp-apk
+          path: apk_output/
+          retention-days: 7
+
+      # ─── 15. CREATE RELEASE ───────────────────────────────────────────────
+      - name: 📦 Create Release
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "📦 Creating release..."
+          
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          TAG="webapp_$TIMESTAMP"
+          
+          # Create release
+          RELEASE_RESPONSE=$(curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
+            -d "{
+              \"tag_name\": \"$TAG\",
+              \"name\": \"Web App $TIMESTAMP\",
+              \"draft\": false,
+              \"prerelease\": false
+            }")
+          
+          RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+          UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url')
+          
+          # Upload APKs
+          for apk in apk_output/*.apk; do
+            if [ -f "$apk" ]; then
+              filename=$(basename "$apk")
+              echo "⬆️ Uploading $filename..."
+              
+              curl -s -X POST \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Content-Type: application/vnd.android.package-archive" \
+                --data-binary @"$apk" \
+                "${UPLOAD_URL%\{?name,label\}}?name=$filename"
+            fi
+          done
+          
+          echo "✅ Release created: $TAG"
+
+      # ─── 16. NOTIFY SUCCESS ──────────────────────────────────────────────
+      - name: ✅ Build Success
+        if: success()
+        run: |
+          echo "🎉 WEB TO APK SUCCESS!"
+          echo "📦 APK available in artifacts and release"
+
+      # ─── 17. NOTIFY FAILURE ──────────────────────────────────────────────
+      - name: ❌ Build Failed
+        if: failure()
+        run: |
+          echo "❌ WEB TO APK FAILED!"
+          echo "📋 Check logs above for details"
