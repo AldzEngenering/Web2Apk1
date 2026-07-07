@@ -18,7 +18,7 @@ on:
         type: string
 
 env:
-  FLUTTER_VERSION: '3.24.3'
+  FLUTTER_VERSION: '^4.7.0'  # Turunkan ke versi lebih stabil
   JAVA_VERSION: '17'
   ANDROID_SDK_VERSION: '34.0.0'
 
@@ -88,12 +88,6 @@ jobs:
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           echo "✅ Android licenses accepted"
 
-      - name: 📱 Install Android Build Tools
-        run: |
-          echo "📱 Installing Android build tools..."
-          sdkmanager "build-tools;34.0.0" "platform-tools" "platforms;android-34" > /dev/null 2>&1 || true
-          echo "✅ Android build tools installed"
-
       # ═══════════════════════════════════════════════════════════════════
       # 5. SETUP FLUTTER
       # ═══════════════════════════════════════════════════════════════════
@@ -104,102 +98,72 @@ jobs:
           channel: stable
           cache: true
 
-      - name: ✅ Verify Flutter Installation
+      - name: ✅ Verify Flutter
         run: |
-          echo "🔍 Verifying Flutter..."
           flutter --version
-          
-          if ! command -v flutter &> /dev/null; then
-            echo "❌ Flutter not found in PATH!"
-            exit 1
-          fi
-          
-          echo "✅ Flutter installed successfully"
-
-      - name: 🩺 Flutter Doctor
-        run: |
-          echo "🩺 Running Flutter Doctor..."
           flutter doctor -v || true
-          echo "✅ Flutter Doctor completed"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 6. CREATE FLUTTER WEB PROJECT
+      # 6. CREATE PROJECT DENGAN TEMPLATE SEDERHANA
       # ═══════════════════════════════════════════════════════════════════
-      - name: 🎯 Create Flutter Web Project
+      - name: 🎯 Create Flutter Project
         run: |
-          echo "🎯 Creating Flutter web project..."
+          echo "🎯 Creating Flutter project..."
           
-          flutter create --platforms=web webapp
-          
-          if [ ! -d "webapp" ]; then
-            echo "❌ Failed to create Flutter project!"
-            exit 1
-          fi
+          # Buat project dengan template app (bukan web)
+          flutter create --platforms=android webapp
           
           cd webapp
           
-          echo "📦 Installing dependencies..."
+          # Hanya install webview_flutter
           flutter pub add webview_flutter:^4.4.2
-          flutter pub add flutter_launcher_icons
           
           echo "✅ Project created"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 7. DOWNLOAD DAN VALIDASI ICON
+      # 7. DOWNLOAD ICON
       # ═══════════════════════════════════════════════════════════════════
-      - name: 🖼️ Download & Validate Icon
+      - name: 🖼️ Download Icon
         run: |
-          echo "🖼️ Downloading and validating icon..."
+          echo "🖼️ Downloading icon..."
           
           mkdir -p webapp/assets
           
-          for i in 1 2 3; do
-            echo "🔄 Attempt $i..."
-            if curl -L -o webapp/assets/icon_raw.png "${{ github.event.inputs.icon_url }}"; then
-              break
-            fi
-            sleep 2
-          done
-          
-          if [ ! -f webapp/assets/icon_raw.png ]; then
-            echo "❌ Failed to download icon!"
-            exit 1
-          fi
-          
-          if ! file webapp/assets/icon_raw.png | grep -q "PNG\|JPEG\|JPG\|image"; then
-            echo "⚠️ Downloaded file is not a valid image!"
-            echo "📋 Creating fallback icon..."
-            
+          # Download dengan fallback
+          if ! curl -L -o webapp/assets/icon.png "${{ github.event.inputs.icon_url }}"; then
+            echo "⚠️ Download failed, creating fallback icon..."
             convert -size 512x512 xc:blue \
               -font Helvetica -pointsize 100 -fill white \
-              -gravity center -annotate +0+0 "APP" \
+              -gravity center -annotate +0+0 "WEB" \
               webapp/assets/icon.png
-          else
-            convert webapp/assets/icon_raw.png webapp/assets/icon.png 2>/dev/null || \
-              cp webapp/assets/icon_raw.png webapp/assets/icon.png
           fi
           
-          if [ ! -f webapp/assets/icon.png ]; then
-            echo "❌ Failed to create icon!"
-            exit 1
+          # Pastikan icon valid
+          if ! file webapp/assets/icon.png | grep -q "PNG\|image"; then
+            echo "⚠️ Invalid icon, creating fallback..."
+            convert -size 512x512 xc:blue \
+              -font Helvetica -pointsize 100 -fill white \
+              -gravity center -annotate +0+0 "WEB" \
+              webapp/assets/icon.png
           fi
           
           echo "✅ Icon ready"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 8. GENERATE MAIN.DART
+      # 8. GENERATE MAIN.DART (SANGAT SEDERHANA)
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Generate main.dart
         run: |
           echo "📝 Generating main.dart..."
           
-          cat > webapp/lib/main.dart << 'EOF'
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          WEB_URL="${{ github.event.inputs.web_url }}"
+          
+          cat > webapp/lib/main.dart << EOF
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
 
-          void main() {
-            runApp(const MyApp());
-          }
+          void main() => runApp(const MyApp());
 
           class MyApp extends StatelessWidget {
             const MyApp({super.key});
@@ -207,11 +171,8 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: 'APP_NAME_PLACEHOLDER',
-                theme: ThemeData(
-                  colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-                  useMaterial3: true,
-                ),
+                title: '$APP_NAME',
+                theme: ThemeData(useMaterial3: true),
                 home: const WebViewScreen(),
               );
             }
@@ -225,81 +186,49 @@ jobs:
           }
 
           class _WebViewScreenState extends State<WebViewScreen> {
-            late final WebViewController _controller;
+            late final WebViewController controller;
 
             @override
             void initState() {
               super.initState();
-              
-              _controller = WebViewController()
+              controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..setBackgroundColor(const Color(0x00000000))
-                ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
+                ..loadRequest(Uri.parse('$WEB_URL'));
             }
 
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                appBar: AppBar(
-                  title: Text('APP_NAME_PLACEHOLDER'),
-                  centerTitle: true,
-                  elevation: 0,
-                ),
-                body: SafeArea(
-                  child: WebViewWidget(controller: _controller),
-                ),
+                appBar: AppBar(title: Text('$APP_NAME')),
+                body: WebViewWidget(controller: controller),
               );
             }
           }
           EOF
           
-          APP_NAME="${{ github.event.inputs.app_name }}"
-          WEB_URL="${{ github.event.inputs.web_url }}"
-          
-          sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" webapp/lib/main.dart
-          sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" webapp/lib/main.dart
-          
           echo "✅ main.dart generated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 9. GENERATE ICON CONFIG
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 📝 Generate Icon Config
-        run: |
-          echo "📝 Generating icon config..."
-          
-          cat > webapp/flutter_launcher_icons.yaml << 'EOF'
-          flutter_launcher_icons:
-            android: true
-            ios: false
-            image_path: "assets/icon.png"
-            adaptive_icon_background: "#ffffff"
-            adaptive_icon_foreground: "assets/icon.png"
-            min_sdk_android: 21
-          EOF
-          
-          echo "✅ Config generated"
-
-      # ═══════════════════════════════════════════════════════════════════
-      # 10. UPDATE PUBSPEC.YAML — FIXED
+      # 9. UPDATE PUBSPEC.YAML (SEDERHANA)
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Update pubspec.yaml
         run: |
           echo "📝 Updating pubspec.yaml..."
           
           cd webapp
+          
+          # Backup
           cp pubspec.yaml pubspec.yaml.bak
           
+          # Update nama package
           APP_NAME="${{ github.event.inputs.app_name }}"
           PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]/_/g' | sed 's/_\+/_/g' | sed 's/^_//;s/_$//')
-          
-          # Update name
           sed -i "s/^name:.*/name: $PACKAGE_NAME/g" pubspec.yaml
           
-          # HAPUS bagian flutter: yang sudah ada (jika ada)
-          sed -i '/^flutter:/,$d' pubspec.yaml
+          # Hapus semua bagian flutter yang sudah ada
+          sed -i '/^flutter:/,/^[^ ]/d' pubspec.yaml
           
-          # Tambahkan flutter section yang benar
+          # Tambahkan flutter section
           cat >> pubspec.yaml << 'EOF'
           
           flutter:
@@ -309,268 +238,68 @@ jobs:
           EOF
           
           echo "✅ pubspec.yaml updated"
-          
-          # Debug: tampilkan pubspec.yaml
-          echo "📋 pubspec.yaml content:"
-          cat pubspec.yaml
 
       # ═══════════════════════════════════════════════════════════════════
-      # 11. FIX GRADLE PROJECT
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 🔧 Fix Gradle Project
-        working-directory: ./webapp
-        run: |
-          echo "🔧 Fixing Gradle project..."
-          
-          mkdir -p android/gradle/wrapper
-          mkdir -p android/app/src/main
-          mkdir -p android/app/src/main/res/values
-          
-          # gradle-wrapper.properties
-          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.3-bin.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          
-          # settings.gradle
-          cat > android/settings.gradle << 'EOF'
-          include ':app'
-          def localPropertiesFile = new File(rootProject.projectDir, "local.properties")
-          def properties = new Properties()
-          assert localPropertiesFile.exists()
-          localPropertiesFile.withReader("UTF-8") { reader -> properties.load(reader) }
-          def flutterSdkPath = properties.getProperty("flutter.sdk")
-          assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
-          apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
-          EOF
-          
-          # local.properties
-          cat > android/local.properties << 'EOF'
-          sdk.dir=/usr/local/lib/android/sdk
-          flutter.sdk=/opt/flutter
-          EOF
-          
-          # project build.gradle
-          cat > android/build.gradle << 'EOF'
-          buildscript {
-              ext.kotlin_version = '1.9.22'
-              repositories { google(); mavenCentral() }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:7.4.2'
-                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-              }
-          }
-          allprojects {
-              repositories { google(); mavenCentral() }
-          }
-          rootProject.buildDir = '../build'
-          subprojects { project.buildDir = "${rootProject.buildDir}/${project.name}" }
-          subprojects { project.evaluationDependsOn(':app') }
-          tasks.register('clean', Delete) { delete rootProject.buildDir }
-          EOF
-          
-          # app/build.gradle
-          cat > android/app/build.gradle << 'EOF'
-          def localProperties = new Properties()
-          def localPropertiesFile = rootProject.file('local.properties')
-          if (localPropertiesFile.exists()) {
-              localPropertiesFile.withReader('UTF-8') { reader ->
-                  localProperties.load(reader)
-              }
-          }
-          def flutterRoot = localProperties.getProperty('flutter.sdk')
-          if (flutterRoot == null) {
-              throw new GradleException("Flutter SDK not found.")
-          }
-          def flutterVersionCode = localProperties.getProperty('flutter.versionCode') ?: '1'
-          def flutterVersionName = localProperties.getProperty('flutter.versionName') ?: '1.0'
-          
-          apply plugin: 'com.android.application'
-          apply plugin: 'kotlin-android'
-          apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
-          
-          android {
-              namespace 'com.example.webapp'
-              compileSdk 34
-              ndkVersion flutter.ndkVersion
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-              kotlinOptions { jvmTarget = '17' }
-              sourceSets { main.java.srcDirs += 'src/main/kotlin' }
-              defaultConfig {
-                  applicationId "com.example.webapp"
-                  minSdkVersion 21
-                  targetSdkVersion 34
-                  versionCode flutterVersionCode.toInteger()
-                  versionName flutterVersionName
-              }
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.debug
-                      minifyEnabled true
-                      proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-                  }
-              }
-          }
-          flutter { source '../..' }
-          dependencies {
-              implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
-          }
-          EOF
-          
-          # proguard-rules.pro
-          mkdir -p android/app
-          cat > android/app/proguard-rules.pro << 'EOF'
-          -keep class io.flutter.app.** { *; }
-          -keep class io.flutter.plugin.**  { *; }
-          -keep class io.flutter.util.**  { *; }
-          -keep class io.flutter.view.**  { *; }
-          -keep class io.flutter.**  { *; }
-          -keep class io.flutter.plugins.**  { *; }
-          EOF
-          
-          # AndroidManifest.xml
-          mkdir -p android/app/src/main
-          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.example.webapp">
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <application
-                  android:label="webapp"
-                  android:icon="@mipmap/ic_launcher"
-                  android:usesCleartextTraffic="true">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:launchMode="singleTop"
-                      android:theme="@style/LaunchTheme"
-                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                      android:hardwareAccelerated="true"
-                      android:windowSoftInputMode="adjustResize">
-                      <meta-data
-                          android:name="io.flutter.embedding.android.NormalTheme"
-                          android:resource="@style/NormalTheme"/>
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-                  <meta-data
-                      android:name="flutterEmbedding"
-                      android:value="2" />
-              </application>
-          </manifest>
-          EOF
-          
-          # styles.xml
-          cat > android/app/src/main/res/values/styles.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
-                  <item name="android:windowBackground">@android:color/white</item>
-              </style>
-              <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
-                  <item name="android:windowBackground">?android:colorBackground</item>
-              </style>
-          </resources>
-          EOF
-          
-          echo "✅ Gradle project fixed!"
-
-      # ═══════════════════════════════════════════════════════════════════
-      # 12. FLUTTER CLEAN & PUB GET
+      # 10. FLUTTER CLEAN & PUB GET
       # ═══════════════════════════════════════════════════════════════════
       - name: 🧹 Flutter Clean
         working-directory: ./webapp
-        run: |
-          echo "🧹 Running flutter clean..."
-          flutter clean || true
-          echo "✅ Flutter clean completed"
+        run: flutter clean || true
 
       - name: 📦 Flutter Pub Get
         working-directory: ./webapp
         run: |
           echo "📦 Running flutter pub get..."
-          
-          for i in 1 2 3; do
-            echo "🔄 Attempt $i..."
-            if flutter pub get; then
-              echo "✅ flutter pub get succeeded"
-              break
-            fi
-            sleep 5
-          done
+          flutter pub get
           
           if [ $? -ne 0 ]; then
-            echo "❌ flutter pub get failed after 3 attempts!"
+            echo "❌ flutter pub get failed!"
             exit 1
           fi
           
           echo "✅ Dependencies installed"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 13. GENERATE ICON
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 🖼️ Generate Icon
-        working-directory: ./webapp
-        run: |
-          echo "🖼️ Generating icon..."
-          flutter pub run flutter_launcher_icons:main || true
-          echo "✅ Icon generated"
-
-      # ═══════════════════════════════════════════════════════════════════
-      # 14. BUILD APK
+      # 11. BUILD APK (HANYA RELEASE)
       # ═══════════════════════════════════════════════════════════════════
       - name: 🔨 Build APK
         working-directory: ./webapp
         run: |
           echo "🔨 Building APK..."
           
-          # Try with debug first
-          if flutter build apk --debug; then
-            echo "✅ Debug build succeeded!"
-            
-            # Then try release
-            if ! flutter build apk --release --split-per-abi; then
-              echo "⚠️ Release build failed, trying without split..."
-              if ! flutter build apk --release; then
-                echo "❌ All build attempts failed!"
-                exit 1
-              fi
-            fi
-          else
-            echo "❌ Debug build failed!"
+          # Build release langsung
+          flutter build apk --release
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed!"
             exit 1
           fi
           
-          echo "✅ Build completed successfully!"
+          echo "✅ Build completed!"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 15. COLLECT APK
+      # 12. COLLECT APK
       # ═══════════════════════════════════════════════════════════════════
       - name: 📦 Collect APK
         run: |
           echo "📦 Collecting APK..."
           mkdir -p apk_output
           
+          # Cari APK
           find webapp/build -name "*.apk" -exec cp {} apk_output/ \; 2>/dev/null || true
           
+          # Jika tidak ditemukan, cek path standar
           if [ -z "$(ls -A apk_output 2>/dev/null)" ]; then
-            if [ -d "webapp/build/app/outputs/flutter-apk" ]; then
-              cp webapp/build/app/outputs/flutter-apk/*.apk apk_output/ 2>/dev/null || true
+            if [ -f "webapp/build/app/outputs/flutter-apk/app-release.apk" ]; then
+              cp webapp/build/app/outputs/flutter-apk/app-release.apk apk_output/
             fi
           fi
           
-          echo "📦 Final APK list:"
-          ls -la apk_output/ || true
+          echo "📦 APK files:"
+          ls -la apk_output/ || echo "No APK found"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 16. UPLOAD APK
+      # 13. UPLOAD APK
       # ═══════════════════════════════════════════════════════════════════
       - name: ⬆️ Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -581,7 +310,7 @@ jobs:
           if-no-files-found: warn
 
       # ═══════════════════════════════════════════════════════════════════
-      # 17. NOTIFY
+      # 14. NOTIFY
       # ═══════════════════════════════════════════════════════════════════
       - name: ✅ Build Success
         if: success()
