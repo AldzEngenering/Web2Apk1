@@ -139,7 +139,6 @@ jobs:
           cd webapp
           
           echo "📦 Installing dependencies..."
-          # Gunakan versi webview_flutter yang kompatibel
           flutter pub add webview_flutter:^4.4.2
           flutter pub add flutter_launcher_icons
           
@@ -154,7 +153,6 @@ jobs:
           
           mkdir -p webapp/assets
           
-          # Download icon
           for i in 1 2 3; do
             echo "🔄 Attempt $i..."
             if curl -L -o webapp/assets/icon_raw.png "${{ github.event.inputs.icon_url }}"; then
@@ -168,7 +166,6 @@ jobs:
             exit 1
           fi
           
-          # Check if file is valid image
           if ! file webapp/assets/icon_raw.png | grep -q "PNG\|JPEG\|JPG\|image"; then
             echo "⚠️ Downloaded file is not a valid image!"
             echo "📋 Creating fallback icon..."
@@ -178,7 +175,6 @@ jobs:
               -gravity center -annotate +0+0 "APP" \
               webapp/assets/icon.png
           else
-            # Convert to PNG if needed
             convert webapp/assets/icon_raw.png webapp/assets/icon.png 2>/dev/null || \
               cp webapp/assets/icon_raw.png webapp/assets/icon.png
           fi
@@ -191,7 +187,7 @@ jobs:
           echo "✅ Icon ready"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 8. GENERATE MAIN.DART (SEDERHANA)
+      # 8. GENERATE MAIN.DART
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Generate main.dart
         run: |
@@ -285,7 +281,7 @@ jobs:
           echo "✅ Config generated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 10. UPDATE PUBSPEC.YAML
+      # 10. UPDATE PUBSPEC.YAML — FIXED
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Update pubspec.yaml
         run: |
@@ -296,9 +292,14 @@ jobs:
           
           APP_NAME="${{ github.event.inputs.app_name }}"
           PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]/_/g' | sed 's/_\+/_/g' | sed 's/^_//;s/_$//')
+          
+          # Update name
           sed -i "s/^name:.*/name: $PACKAGE_NAME/g" pubspec.yaml
           
-          # Tambahkan konfigurasi minimum untuk webview
+          # HAPUS bagian flutter: yang sudah ada (jika ada)
+          sed -i '/^flutter:/,$d' pubspec.yaml
+          
+          # Tambahkan flutter section yang benar
           cat >> pubspec.yaml << 'EOF'
           
           flutter:
@@ -308,9 +309,13 @@ jobs:
           EOF
           
           echo "✅ pubspec.yaml updated"
+          
+          # Debug: tampilkan pubspec.yaml
+          echo "📋 pubspec.yaml content:"
+          cat pubspec.yaml
 
       # ═══════════════════════════════════════════════════════════════════
-      # 11. FIX GRADLE PROJECT (LENGKAP)
+      # 11. FIX GRADLE PROJECT
       # ═══════════════════════════════════════════════════════════════════
       - name: 🔧 Fix Gradle Project
         working-directory: ./webapp
