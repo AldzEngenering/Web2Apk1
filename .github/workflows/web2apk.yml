@@ -18,7 +18,7 @@ on:
         type: string
 
 env:
-  FLUTTER_VERSION: '^4.7.0'  # Turunkan ke versi lebih stabil
+  FLUTTER_VERSION: '3.22.4'  # Turunkan ke versi lebih stabil
   JAVA_VERSION: '17'
   ANDROID_SDK_VERSION: '34.0.0'
 
