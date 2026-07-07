@@ -65,14 +65,14 @@ jobs:
           echo "✅ System dependencies installed"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 3. SETUP JAVA
+      # 3. SETUP JAVA (TANPA CACHE)
       # ═══════════════════════════════════════════════════════════════════
       - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: ${{ env.JAVA_VERSION }}
-          cache: 'gradle'
+          # HAPUS CACHE - karena Gradle file belum ada
 
       # ═══════════════════════════════════════════════════════════════════
       # 4. SETUP ANDROID SDK
@@ -149,7 +149,190 @@ jobs:
           echo "✅ Project created"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 7. DOWNLOAD ICON
+      # 7. FIX GRADLE PROJECT (AUTO-REPAIR)
+      # ═══════════════════════════════════════════════════════════════════
+      - name: 🔧 Fix Gradle Project
+        working-directory: ./webapp
+        run: |
+          echo "🔧 Fixing Gradle project..."
+          
+          # ─── Fix gradle-wrapper.properties ─────────────────────────────
+          echo "🔧 Fixing gradle-wrapper.properties..."
+          mkdir -p android/gradle/wrapper
+          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.3-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          
+          # ─── Fix project build.gradle ──────────────────────────────────
+          echo "🔧 Fixing project build.gradle..."
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.22'
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:7.4.2'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.buildDir = '../build'
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+
+          tasks.register('clean', Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+          
+          # ─── Fix app/build.gradle ──────────────────────────────────────
+          echo "🔧 Fixing app/build.gradle..."
+          cat > android/app/build.gradle << 'EOF'
+          def localProperties = new Properties()
+          def localPropertiesFile = rootProject.file('local.properties')
+          if (localPropertiesFile.exists()) {
+              localPropertiesFile.withReader('UTF-8') { reader ->
+                  localProperties.load(reader)
+              }
+          }
+
+          def flutterRoot = localProperties.getProperty('flutter.sdk')
+          if (flutterRoot == null) {
+              throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
+          }
+
+          def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+          if (flutterVersionCode == null) {
+              flutterVersionCode = '1'
+          }
+
+          def flutterVersionName = localProperties.getProperty('flutter.versionName')
+          if (flutterVersionName == null) {
+              flutterVersionName = '1.0'
+          }
+
+          apply plugin: 'com.android.application'
+          apply plugin: 'kotlin-android'
+          apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+
+          android {
+              namespace 'com.example.webapp'
+              compileSdkVersion 34
+              ndkVersion flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+
+              sourceSets {
+                  main.java.srcDirs += 'src/main/kotlin'
+              }
+
+              defaultConfig {
+                  applicationId "com.example.webapp"
+                  minSdkVersion 21
+                  targetSdkVersion 34
+                  versionCode flutterVersionCode.toInteger()
+                  versionName flutterVersionName
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.debug
+                      minifyEnabled true
+                      proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                  }
+                  debug {
+                      signingConfig signingConfigs.debug
+                      minifyEnabled false
+                  }
+              }
+          }
+
+          flutter {
+              source '../..'
+          }
+
+          dependencies {
+              implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+          }
+          EOF
+          
+          # ─── Create proguard-rules.pro ──────────────────────────────────
+          echo "🔧 Creating proguard-rules.pro..."
+          mkdir -p android/app
+          cat > android/app/proguard-rules.pro << 'EOF'
+          # Flutter specific
+          -keep class io.flutter.app.** { *; }
+          -keep class io.flutter.plugin.**  { *; }
+          -keep class io.flutter.util.**  { *; }
+          -keep class io.flutter.view.**  { *; }
+          -keep class io.flutter.**  { *; }
+          -keep class io.flutter.plugins.**  { *; }
+          EOF
+          
+          # ─── Create AndroidManifest.xml ─────────────────────────────────
+          echo "🔧 Creating AndroidManifest.xml..."
+          mkdir -p android/app/src/main
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.example.webapp">
+              
+              <application
+                  android:label="webapp"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme"
+                          />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+          
+          echo "✅ Gradle project fixed!"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # 8. DOWNLOAD ICON
       # ═══════════════════════════════════════════════════════════════════
       - name: 🖼️ Download Icon
         run: |
@@ -183,7 +366,7 @@ jobs:
           echo "✅ Icon downloaded"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 8. GENERATE MAIN.DART
+      # 9. GENERATE MAIN.DART
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Generate main.dart
         run: |
@@ -277,7 +460,7 @@ jobs:
           echo "✅ main.dart generated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 9. GENERATE CONFIG FILES
+      # 10. GENERATE CONFIG FILES
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Generate Config Files
         run: |
@@ -306,7 +489,7 @@ jobs:
           echo "✅ Config files generated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 10. UPDATE PUBSPEC.YAML
+      # 11. UPDATE PUBSPEC.YAML
       # ═══════════════════════════════════════════════════════════════════
       - name: 📝 Update pubspec.yaml
         run: |
@@ -337,7 +520,7 @@ jobs:
           echo "✅ pubspec.yaml updated"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 11. FLUTTER CLEAN
+      # 12. FLUTTER CLEAN
       # ═══════════════════════════════════════════════════════════════════
       - name: 🧹 Flutter Clean
         working-directory: ./webapp
@@ -347,7 +530,7 @@ jobs:
           echo "✅ Flutter clean completed"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 12. FLUTTER PUB GET
+      # 13. FLUTTER PUB GET
       # ═══════════════════════════════════════════════════════════════════
       - name: 📦 Flutter Pub Get
         working-directory: ./webapp
@@ -371,7 +554,7 @@ jobs:
           echo "✅ Dependencies installed"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 13. GENERATE ICONS
+      # 14. GENERATE ICONS
       # ═══════════════════════════════════════════════════════════════════
       - name: 🖼️ Generate Icons
         working-directory: ./webapp
@@ -381,7 +564,7 @@ jobs:
           echo "✅ Icons generated (or skipped)"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 14. GENERATE SPLASH
+      # 15. GENERATE SPLASH
       # ═══════════════════════════════════════════════════════════════════
       - name: 🖼️ Generate Splash
         working-directory: ./webapp
@@ -391,7 +574,7 @@ jobs:
           echo "✅ Splash generated (or skipped)"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 15. BUILD APK
+      # 16. BUILD APK
       # ═══════════════════════════════════════════════════════════════════
       - name: 🔨 Build APK
         working-directory: ./webapp
@@ -417,7 +600,7 @@ jobs:
           echo "✅ Build completed successfully!"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 16. COLLECT APK
+      # 17. COLLECT APK
       # ═══════════════════════════════════════════════════════════════════
       - name: 📦 Collect APK
         run: |
@@ -472,7 +655,7 @@ jobs:
           ls -la apk_output/ || true
 
       # ═══════════════════════════════════════════════════════════════════
-      # 17. UPLOAD APK AS ARTIFACT
+      # 18. UPLOAD APK AS ARTIFACT
       # ═══════════════════════════════════════════════════════════════════
       - name: ⬆️ Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -483,7 +666,7 @@ jobs:
           if-no-files-found: warn
 
       # ═══════════════════════════════════════════════════════════════════
-      # 18. CREATE RELEASE
+      # 19. CREATE RELEASE
       # ═══════════════════════════════════════════════════════════════════
       - name: 📦 Create Release
         if: success() && !cancelled()
@@ -543,7 +726,7 @@ jobs:
           echo "✅ APK uploaded to release"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 19. NOTIFY SUCCESS
+      # 20. NOTIFY SUCCESS
       # ═══════════════════════════════════════════════════════════════════
       - name: ✅ Build Success
         if: success()
@@ -561,7 +744,7 @@ jobs:
           fi
 
       # ═══════════════════════════════════════════════════════════════════
-      # 20. NOTIFY FAILURE WITH LOGS
+      # 21. NOTIFY FAILURE WITH LOGS
       # ═══════════════════════════════════════════════════════════════════
       - name: ❌ Build Failed
         if: failure()
@@ -589,7 +772,7 @@ jobs:
           echo "📋 Check logs above for the actual error"
 
       # ═══════════════════════════════════════════════════════════════════
-      # 21. CLEANUP
+      # 22. CLEANUP
       # ═══════════════════════════════════════════════════════════════════
       - name: 🧹 Cleanup
         if: always()
