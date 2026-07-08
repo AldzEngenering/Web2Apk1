@@ -41,22 +41,33 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # ─── ACCEPT ANDROID SDK LICENSES ──────────────────
-      # ubuntu-latest runners already ship a full Android SDK at $ANDROID_HOME,
-      # so we just accept licenses and install the specific packages we need
-      # on it — no extra SDK-setup action required (that action was pulling
-      # Google's deprecated legacy "tools" package, whose zip download is
-      # unreliable and was causing the build to fail).
-      - name: Accept licenses and install SDK packages
+      # ─── INSTALL ANDROID SDK MANUALLY ──────────────────
+      - name: Install Android SDK (Manual)
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
-          echo "✅ Android SDK licenses accepted and packages installed!"
+          # Download command line tools
+          cd /tmp
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-11076708_latest.zip
+          
+          # Setup Android SDK
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          mv cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+          
+          # Set path
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+          
+          # Accept ALL licenses WITHOUT preview
+          echo "✅ Accepting Android SDK licenses..."
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          
+          # Install specific build tools (STABLE, not preview)
+          sdkmanager "build-tools;34.0.0" --no_https
+          sdkmanager "platforms;android-34" --no_https
+          sdkmanager "platform-tools" --no_https
+          
+          echo "✅ Android SDK installed!"
 
-      # ─── INSTALL DEPENDENCIES ──────────────────────────
+      # ─── INSTALL SYSTEM DEPENDENCIES ──────────────────
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -73,7 +84,6 @@ jobs:
 
       # ─── CREATE FLUTTER PROJECT ────────────────────────
       - name: Create Flutter project
-        id: create_project
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
@@ -100,123 +110,48 @@ jobs:
           flutter pub get
           echo "✅ Dependencies installed!"
 
-      # ─── DOWNLOAD ICON (DENGAN VALIDASI) ──────────────
+      # ─── DOWNLOAD ICON ──────────────────────────────────
       - name: Download and validate icon
         id: download_icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
           echo "🖼️ Downloading icon from: $ICON_URL"
           
-          # Buat folder icon
           mkdir -p webapp/android/app/src/main/res/mipmap-hdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-mdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxxhdpi
           
-          # Download dengan header User-Agent
           curl -L -o icon.png \
             -H "User-Agent: Mozilla/5.0" \
+            -H "Accept: image/*" \
             "$ICON_URL"
           
-          # 🔥 VALIDASI: Cek apakah file benar-benar gambar
-          echo "📋 Checking file type..."
-          file icon.png
-          
-          # Cek jika file kosong
           if [ ! -s icon.png ]; then
             echo "❌ File icon kosong!"
             exit 1
           fi
           
-          # Cek apakah file adalah gambar
           if ! file icon.png | grep -q "image"; then
-            echo "⚠️ File bukan gambar langsung, mengecek apakah ini multipart/form-data..."
-            head -c 200 icon.png
-            echo ""
-
-            # Fallback: beberapa release asset ternyata masih terbungkus
-            # multipart/form-data (boundary + headers) karena bug di proses
-            # upload aslinya. Coba ekstrak gambar asli dari dalamnya.
-            python3 - << 'PYEOF'
-import re
-
-with open("icon.png", "rb") as f:
-    data = f.read()
-
-# Cari akhir header multipart (baris kosong setelah Content-Type)
-idx = data.find(b"\r\n\r\n")
-if idx == -1:
-    idx = data.find(b"\n\n")
-    header_len = 2
-else:
-    header_len = 4
-
-if idx != -1:
-    body = data[idx + header_len:]
-    # Buang boundary penutup di akhir file jika ada
-    end_idx = body.rfind(b"\r\n--")
-    if end_idx == -1:
-        end_idx = body.rfind(b"\n--")
-    if end_idx != -1:
-        body = body[:end_idx]
-
-    with open("icon_extracted.png", "wb") as out:
-        out.write(body)
-    print("✅ Extracted embedded file from multipart wrapper")
-else:
-    print("❌ Could not find multipart boundary in file")
-PYEOF
-
-            if [ -f icon_extracted.png ] && file icon_extracted.png | grep -q "image"; then
-              mv icon_extracted.png icon.png
-              echo "✅ Berhasil mengekstrak gambar asli dari multipart wrapper!"
-              file icon.png
-            else
-              echo "❌ URL tidak mengembalikan gambar yang valid, dan gagal mengekstrak dari multipart wrapper!"
-              echo "⚠️ Perbaiki proses upload icon di sumbernya (release asset ini masih berisi raw multipart/form-data, bukan file gambar murni)."
-              exit 1
-            fi
+            echo "⚠️ File bukan gambar!"
+            exit 1
           fi
           
-          echo "✅ Icon downloaded and validated!"
+          echo "✅ Icon downloaded!"
 
       # ─── RESIZE ICON ────────────────────────────────────
       - name: Resize icon
         run: |
           echo "🖼️ Resizing icon..."
           
-          # 🔥 AMAN: Gunakan convert dengan validasi
-          if ! convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png; then
-            echo "❌ Failed to resize to mdpi"
-            exit 1
-          fi
+          convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           
-          if ! convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png; then
-            echo "❌ Failed to resize to hdpi"
-            exit 1
-          fi
-          
-          if ! convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png; then
-            echo "❌ Failed to resize to xhdpi"
-            exit 1
-          fi
-          
-          if ! convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png; then
-            echo "❌ Failed to resize to xxhdpi"
-            exit 1
-          fi
-          
-          if ! convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png; then
-            echo "❌ Failed to resize to xxxhdpi"
-            exit 1
-          fi
-          
-          echo "✅ Icon resized successfully!"
-          
-          # Tampilkan hasil
-          echo "📋 Resized icons:"
-          ls -la webapp/android/app/src/main/res/mipmap-*/ic_launcher.png
+          echo "✅ Icon resized!"
 
       # ─── GENERATE WEBVIEW CODE ──────────────────────────
       - name: Generate WebView code
@@ -301,30 +236,6 @@ PYEOF
           fi
           
           echo "✅ Android Manifest updated!"
-
-      # ─── FALLBACK ICON (JIKA GAGAL) ────────────────────
-      - name: Generate fallback icon
-        if: failure() && steps.download_icon.outcome == 'failure'
-        run: |
-          echo "⚠️ Generating fallback icon..."
-          
-          # Buat icon default dengan ImageMagick
-          convert -size 192x192 xc:blue \
-            -fill white -gravity center \
-            -font Arial -pointsize 60 \
-            -draw "text 0,0 'WEB'" \
-            webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          
-          # Copy ke semua resolusi
-          for size in 48 72 96 144; do
-            convert -size ${size}x${size} xc:blue \
-              -fill white -gravity center \
-              -font Arial -pointsize $((size/3)) \
-              -draw "text 0,0 'W'" \
-              webapp/android/app/src/main/res/mipmap-${size}/ic_launcher.png 2>/dev/null || true
-          done
-          
-          echo "✅ Fallback icon generated!"
 
       # ─── BUILD APK ──────────────────────────────────────
       - name: Build APK
