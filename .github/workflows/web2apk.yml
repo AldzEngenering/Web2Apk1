@@ -39,11 +39,12 @@ jobs:
           distribution: 'temurin'
           java-version: '11'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip wget curl imagemagick
 
+      # ─── INSTALL ANDROID SDK (FIXED) ─────────────────
       - name: Install Android SDK
         run: |
           cd /tmp
@@ -51,10 +52,19 @@ jobs:
           unzip -q commandlinetools-linux-11076708_latest.zip
           mkdir -p $ANDROID_HOME/cmdline-tools
           mv cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+          
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "build-tools;34.0.0" > /dev/null 2>&1
-          sdkmanager "platforms;android-34" > /dev/null 2>&1
+          
+          # Accept licenses dengan echo (bukan yes)
+          echo "✅ Accepting Android SDK licenses..."
+          echo y | sdkmanager --licenses --no_https > /dev/null 2>&1 || true
+          
+          # Install build tools
+          echo "📦 Installing build-tools..."
+          echo y | sdkmanager "build-tools;34.0.0" --no_https > /dev/null 2>&1 || true
+          echo y | sdkmanager "platforms;android-34" --no_https > /dev/null 2>&1 || true
+          
+          echo "✅ Android SDK installed!"
 
       - name: Create Flutter project
         run: |
