@@ -378,7 +378,7 @@ jobs:
           export JAVA_HOME=$JAVA_HOME
           export PATH=$JAVA_HOME/bin:$PATH
           java -version
-          gradle wrapper --gradle-version 8.0.2
+          gradle wrapper --gradle-version 7.1.2
           chmod +x gradlew
 
       # ─── 9. DEBUG GRADLE ──────────────────────────────────────────
