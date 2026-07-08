@@ -27,20 +27,13 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         
-      # ==================== SETUP NODE ====================
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          
-      # ==================== SETUP JAVA ====================
+      # ==================== SETUP JAVA (No Cache) ====================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
-          cache: 'gradle'
+          # Remove cache to avoid lock file errors
           
       # ==================== SETUP FLUTTER ====================
       - name: Setup Flutter
@@ -58,18 +51,20 @@ jobs:
         run: |
           echo "📁 Creating Flutter project: ${{ github.event.inputs.app_name }}"
           
-          # Create clean project
+          # Create clean project with proper naming
+          PROJECT_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
+          
           flutter create \
             --org com.web2apk \
-            --project-name "${{ github.event.inputs.app_name }}" \
+            --project-name "$PROJECT_NAME" \
             --platforms android \
-            "${{ github.event.inputs.app_name }}"
+            "$PROJECT_NAME"
           
-          cd "${{ github.event.inputs.app_name }}"
+          cd "$PROJECT_NAME"
           
-          # ==================== CLEAN PUBSPEC ====================
+          # ==================== UPDATE PUBSPEC ====================
           cat > pubspec.yaml << 'EOF'
-          name: ${{ github.event.inputs.app_name }}
+          name: $PROJECT_NAME
           description: Web to APK app
           version: 1.0.0+1
           
@@ -129,10 +124,8 @@ jobs:
           import 'package:webview_flutter_android/webview_flutter_android.dart';
           import 'package:url_launcher/url_launcher.dart';
           import 'package:connectivity_plus/connectivity_plus.dart';
-          import 'package:shared_preferences/shared_preferences.dart';
           import 'package:permission_handler/permission_handler.dart';
           import 'package:device_info_plus/device_info_plus.dart';
-          import 'package:package_info_plus/package_info_plus.dart';
           import 'package:cached_network_image/cached_network_image.dart';
           
           void main() {
@@ -277,10 +270,7 @@ jobs:
                 body: SafeArea(
                   child: Stack(
                     children: [
-                      // WebView
                       WebViewWidget(controller: _controller),
-                      
-                      // Loading Indicator
                       if (_isLoading)
                         Container(
                           color: Colors.white,
@@ -288,8 +278,6 @@ jobs:
                             child: CircularProgressIndicator(),
                           ),
                         ),
-                      
-                      // Error Widget
                       if (_hasError)
                         Container(
                           color: Colors.white,
@@ -385,7 +373,7 @@ jobs:
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.web2apk.${{ github.event.inputs.app_name }}">
+              package="com.web2apk.$PROJECT_NAME">
               
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -426,23 +414,24 @@ jobs:
           </manifest>
           EOF
           
-          # ==================== DOWNLOAD AND SETUP ICON ====================
+          # ==================== DOWNLOAD ICON ====================
           echo "🖼️ Downloading icon..."
-          
           mkdir -p assets/icon
           mkdir -p assets/splash
           
-          curl -L -o assets/icon/icon.png "${{ github.event.inputs.icon_url }}"
+          curl -L -o assets/icon/icon.png "${{ github.event.inputs.icon_url }}" || echo "⚠️ Icon download failed, using default"
           
-          # Create splash screen image
-          cp assets/icon/icon.png assets/splash/splash.png
+          # Copy icon as splash
+          cp assets/icon/icon.png assets/splash/splash.png 2>/dev/null || echo "⚠️ No icon for splash"
           
           # ==================== GENERATE SPLASH ====================
+          echo "🖼️ Generating splash screen..."
           flutter pub get
-          flutter pub run flutter_native_splash:create --flavor android
+          flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
           
           # ==================== GENERATE ICONS ====================
-          flutter pub run flutter_launcher_icons:main -f pubspec.yaml
+          echo "🖼️ Generating app icons..."
+          flutter pub run flutter_launcher_icons:main -f pubspec.yaml || echo "⚠️ Icon generation skipped"
           
           # ==================== BUILD APK ====================
           echo "🔨 Building APK..."
@@ -453,22 +442,32 @@ jobs:
           echo "✅ Build completed!"
           
       # ==================== VERIFY APK ====================
-      - name: Verify APK Structure
+      - name: Verify APK
         run: |
-          cd "${{ github.event.inputs.app_name }}"
+          PROJECT_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
+          cd "$PROJECT_NAME"
           APK_DIR="build/app/outputs/flutter-apk/"
+          
           echo "🔍 Verifying APK files..."
           if [ -d "$APK_DIR" ]; then
+            APK_COUNT=$(ls -1 $APK_DIR/*.apk 2>/dev/null | wc -l)
+            echo "📁 Found $APK_COUNT APK file(s)"
             ls -la $APK_DIR
+            
+            if [ $APK_COUNT -eq 0 ]; then
+              echo "❌ ERROR: No APK files found!"
+              exit 1
+            fi
           else
-            echo "❌ APK directory not found!"
+            echo "❌ ERROR: APK directory not found!"
             exit 1
           fi
           
       # ==================== ZIP APK FILES ====================
       - name: Zip APK Files
         run: |
-          cd "${{ github.event.inputs.app_name }}"
+          PROJECT_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
+          cd "$PROJECT_NAME"
           mkdir -p apk_output
           cp build/app/outputs/flutter-apk/*.apk apk_output/
           cd apk_output
