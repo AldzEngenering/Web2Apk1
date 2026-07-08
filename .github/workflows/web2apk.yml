@@ -47,11 +47,13 @@ jobs:
         
       # ==================== CREATE FLUTTER PROJECT ====================
       - name: Create Flutter WebView Project
+        id: project_setup
         run: |
           echo "📁 Creating Flutter project: ${{ github.event.inputs.app_name }}"
           
           # Create clean project with proper naming
           PROJECT_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
+          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_OUTPUT
           
           flutter create \
             --org com.web2apk \
@@ -72,30 +74,29 @@ jobs:
           
           # Download icon with retry
           echo "Downloading icon..."
-          curl -L --max-time 30 -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}" || echo "⚠️ Icon download failed"
-          
-          # Check if download succeeded
-          if [ -f assets/icon/icon_downloaded ] && [ -s assets/icon/icon_downloaded ]; then
+          if curl -L --max-time 30 -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}"; then
             echo "✅ Icon downloaded successfully"
             
             # Detect file type and convert to PNG
             file assets/icon/icon_downloaded
             
             # Try to convert to PNG (handles various formats)
-            convert assets/icon/icon_downloaded -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null || \
-            convert assets/icon/icon_downloaded -resize 512x512 assets/icon/icon.png 2>/dev/null || \
-            cp assets/icon/icon_downloaded assets/icon/icon.png
-            
-            # Verify PNG was created
-            if [ -f assets/icon/icon.png ] && [ -s assets/icon/icon.png ]; then
+            if convert assets/icon/icon_downloaded -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null; then
               echo "✅ Icon converted to PNG successfully"
-              file assets/icon/icon.png
+            elif convert assets/icon/icon_downloaded -resize 512x512 assets/icon/icon.png 2>/dev/null; then
+              echo "✅ Icon converted to PNG successfully (fallback method)"
             else
               echo "⚠️ Icon conversion failed, creating default icon"
               convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
             fi
           else
             echo "⚠️ Icon download failed, creating default icon"
+            convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
+          fi
+          
+          # Verify PNG was created
+          if [ ! -f assets/icon/icon.png ] || [ ! -s assets/icon/icon.png ]; then
+            echo "⚠️ No valid icon found, creating default icon"
             convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
           fi
           
@@ -153,7 +154,12 @@ jobs:
           
           # ==================== CREATE MAIN.DART ====================
           mkdir -p lib
-          cat > lib/main.dart << 'EOF'
+          
+          # Escape the URL for use in Dart code
+          ESCAPED_URL=$(echo "${{ github.event.inputs.web_url }}" | sed 's/"/\\"/g')
+          ESCAPED_APP_NAME=$(echo "${{ github.event.inputs.app_name }}" | sed 's/"/\\"/g')
+          
+          cat > lib/main.dart << EOF
           import 'dart:io';
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
@@ -171,7 +177,7 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: '${{ github.event.inputs.app_name }}',
+                title: '$ESCAPED_APP_NAME',
                 theme: ThemeData(
                   colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
                   useMaterial3: true,
@@ -194,7 +200,7 @@ jobs:
             bool _isLoading = true;
             bool _hasError = false;
             String _errorMessage = '';
-            String _currentUrl = '${{ github.event.inputs.web_url }}';
+            String _currentUrl = '$ESCAPED_URL';
             
             @override
             void initState() {
@@ -212,6 +218,14 @@ jobs:
                   _errorMessage = 'No internet connection';
                 });
               }
+            }
+            
+            Future<void> _requestPermissions() async {
+              await [
+                Permission.storage,
+                Permission.camera,
+                Permission.microphone,
+              ].request();
             }
             
             void _initializeWebView() {
@@ -255,7 +269,7 @@ jobs:
                     },
                   ),
                 )
-                ..loadRequest(Uri.parse('${{ github.event.inputs.web_url }}'));
+                ..loadRequest(Uri.parse('$ESCAPED_URL'));
             }
             
             void _reloadPage() {
@@ -295,10 +309,10 @@ jobs:
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(
+                                const Icon(
                                   Icons.error_outline,
                                   size: 64,
-                                  color: Colors.red[300],
+                                  color: Colors.red,
                                 ),
                                 const SizedBox(height: 16),
                                 Text(
@@ -390,7 +404,7 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
               
               <application
-                  android:label="${{ github.event.inputs.app_name }}"
+                  android:label="$ESCAPED_APP_NAME"
                   android:name="\${applicationName}"
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true"
@@ -427,11 +441,12 @@ jobs:
           echo "🖼️ Generating app icons..."
           flutter pub run flutter_launcher_icons:main -f pubspec.yaml || echo "⚠️ Icon generation skipped"
           
-          
+      # ==================== BUILD APK ====================
       - name: Build APK
         id: build
         run: |
-          cd webapp
+          PROJECT_NAME="${{ steps.project_setup.outputs.PROJECT_NAME }}"
+          cd "$PROJECT_NAME"
           flutter clean
           flutter pub get
           flutter build apk --release
@@ -447,5 +462,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: webapp-apk
-          path: webapp/build/app/outputs/flutter-apk/*.apk
+          path: ${{ steps.project_setup.outputs.PROJECT_NAME }}/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
