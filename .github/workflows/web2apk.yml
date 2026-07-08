@@ -27,7 +27,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         
-      # ==================== SETUP JAVA (No Cache) ====================
+      # ==================== SETUP JAVA ====================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -61,6 +61,51 @@ jobs:
           
           cd "$PROJECT_NAME"
           
+          # ==================== DOWNLOAD AND CONVERT ICON FIRST ====================
+          echo "🖼️ Downloading icon from: ${{ github.event.inputs.icon_url }}"
+          mkdir -p assets/icon
+          mkdir -p assets/splash
+          
+          # Install ImageMagick for image conversion
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          
+          # Download icon with retry
+          echo "Downloading icon..."
+          curl -L --max-time 30 -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}" || echo "⚠️ Icon download failed"
+          
+          # Check if download succeeded
+          if [ -f assets/icon/icon_downloaded ] && [ -s assets/icon/icon_downloaded ]; then
+            echo "✅ Icon downloaded successfully"
+            
+            # Detect file type and convert to PNG
+            file assets/icon/icon_downloaded
+            
+            # Try to convert to PNG (handles various formats)
+            convert assets/icon/icon_downloaded -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null || \
+            convert assets/icon/icon_downloaded -resize 512x512 assets/icon/icon.png 2>/dev/null || \
+            cp assets/icon/icon_downloaded assets/icon/icon.png
+            
+            # Verify PNG was created
+            if [ -f assets/icon/icon.png ] && [ -s assets/icon/icon.png ]; then
+              echo "✅ Icon converted to PNG successfully"
+              file assets/icon/icon.png
+            else
+              echo "⚠️ Icon conversion failed, creating default icon"
+              convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
+            fi
+          else
+            echo "⚠️ Icon download failed, creating default icon"
+            convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
+          fi
+          
+          # Copy icon as splash
+          cp assets/icon/icon.png assets/splash/splash.png
+          
+          echo "✅ Icon prepared:"
+          ls -la assets/icon/
+          ls -la assets/splash/
+          
           # ==================== UPDATE PUBSPEC ====================
           cat > pubspec.yaml << EOF
           name: $PROJECT_NAME
@@ -74,17 +119,10 @@ jobs:
             flutter:
               sdk: flutter
             webview_flutter: ^4.4.0
-            webview_flutter_android: ^3.12.0
             url_launcher: ^6.3.0
             connectivity_plus: ^6.0.0
-            shared_preferences: ^2.2.0
-            device_info_plus: ^10.0.0
-            package_info_plus: ^8.0.0
             permission_handler: ^11.0.0
-            flutter_localizations:
-              sdk: flutter
-            http: ^1.2.0
-            cached_network_image: ^3.3.0
+            device_info_plus: ^10.0.0
             flutter_native_splash: ^2.4.0
             flutter_launcher_icons: ^0.13.0
             
@@ -120,7 +158,6 @@ jobs:
           import 'dart:io';
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
-          import 'package:webview_flutter_android/webview_flutter_android.dart';
           import 'package:url_launcher/url_launcher.dart';
           import 'package:connectivity_plus/connectivity_plus.dart';
           import 'package:permission_handler/permission_handler.dart';
@@ -173,10 +210,8 @@ jobs:
               if (Platform.isAndroid) {
                 final androidInfo = await DeviceInfoPlugin().androidInfo;
                 if (androidInfo.version.sdkInt >= 33) {
-                  // Request notification permission for Android 13+
                   await Permission.notification.request();
                 }
-                // Request other permissions
                 await [
                   Permission.storage,
                   Permission.camera,
@@ -190,13 +225,12 @@ jobs:
               if (connectivityResult == ConnectivityResult.none) {
                 setState(() {
                   _hasError = true;
-                  _errorMessage = 'Tidak ada koneksi internet';
+                  _errorMessage = 'No internet connection';
                 });
               }
             }
             
             void _initializeWebView() {
-              // Use WebViewWidget instead of deprecated platform params
               _controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
                 ..setBackgroundColor(const Color(0x00000000))
@@ -406,44 +440,8 @@ jobs:
           </manifest>
           EOF
           
-          # ==================== DOWNLOAD AND CONVERT ICON ====================
-          echo "🖼️ Downloading and converting icon..."
-          mkdir -p assets/icon
-          mkdir -p assets/splash
-          
-          # Download icon
-          curl -L -o assets/icon/icon_original.png "${{ github.event.inputs.icon_url }}" || echo "⚠️ Icon download failed"
-          
-          # Convert to PNG if needed using ImageMagick
-          sudo apt-get update
-          sudo apt-get install -y imagemagick
-          
-          # Convert to PNG format with proper dimensions
-          if [ -f assets/icon/icon_original.png ]; then
-            # Convert to 512x512 PNG
-            convert assets/icon/icon_original.png -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null || \
-            convert assets/icon/icon_original.png -resize 512x512 assets/icon/icon.png 2>/dev/null || \
-            cp assets/icon/icon_original.png assets/icon/icon.png
-          else
-            # Create default icon if download failed
-            echo "Creating default icon..."
-            convert -size 512x512 xc:blue -fill white -gravity center -pointsize 100 -draw "text 0,0 'APP'" assets/icon/icon.png
-          fi
-          
-          # Copy icon as splash
-          cp assets/icon/icon.png assets/splash/splash.png 2>/dev/null || echo "⚠️ No icon for splash"
-          
           # ==================== GENERATE SPLASH ====================
           echo "🖼️ Generating splash screen..."
-          # Create splash config file
-          cat > flutter_native_splash.yaml << EOF
-          flutter_native_splash:
-            color: "#ffffff"
-            image: assets/splash/splash.png
-            android: true
-            ios: false
-          EOF
-          
           flutter pub get
           flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
           
@@ -459,40 +457,55 @@ jobs:
           
           echo "✅ Build completed!"
           
-      # ==================== VERIFY APK ====================
-      - name: Verify APK
+          # ==================== LIST ALL FILES ====================
+          echo "📁 Listing all APK files..."
+          find . -name "*.apk" -type f
+          
+      # ==================== FIND AND UPLOAD APK ====================
+      - name: Find and Upload APK
         run: |
           PROJECT_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
           cd "$PROJECT_NAME"
-          APK_DIR="build/app/outputs/flutter-apk/"
           
-          echo "🔍 Verifying APK files..."
-          if [ -d "$APK_DIR" ]; then
-            APK_COUNT=$(ls -1 $APK_DIR/*.apk 2>/dev/null | wc -l)
-            echo "📁 Found $APK_COUNT APK file(s)"
-            ls -la $APK_DIR
+          echo "📁 Searching for APK files..."
+          
+          # Find all APK files
+          APK_FILES=$(find . -name "*.apk" -type f)
+          
+          if [ -n "$APK_FILES" ]; then
+            echo "✅ Found APK files:"
+            echo "$APK_FILES"
             
-            if [ $APK_COUNT -eq 0 ]; then
-              echo "❌ ERROR: No APK files found!"
-              exit 1
-            fi
+            # Create output directory
+            mkdir -p apk_output
+            
+            # Copy all found APK files
+            echo "$APK_FILES" | while read -r file; do
+              if [ -f "$file" ]; then
+                cp "$file" apk_output/
+                echo "📁 Copied: $file"
+              fi
+            done
+            
+            # List copied files
+            echo "📁 Files in apk_output:"
+            ls -la apk_output/
+            
+            # Create zip
+            cd apk_output
+            zip -r ../web2apk_bundle.zip *.apk
+            cd ..
+            
+            echo "✅ Bundle created:"
+            ls -la web2apk_bundle.zip
+            
           else
-            echo "❌ ERROR: APK directory not found!"
+            echo "❌ ERROR: No APK files found!"
+            echo "📁 Directory structure:"
+            ls -la
+            find . -type d | head -20
             exit 1
           fi
-          
-      # ==================== ZIP APK FILES ====================
-      - name: Zip APK Files
-        run: |
-          PROJECT_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
-          cd "$PROJECT_NAME"
-          mkdir -p apk_output
-          cp build/app/outputs/flutter-apk/*.apk apk_output/
-          cd apk_output
-          zip -r ../web2apk_bundle.zip *.apk
-          cd ..
-          echo "✅ APK Bundle created:"
-          ls -la web2apk_bundle.zip
           
       # ==================== UPLOAD ARTIFACT ====================
       - name: Upload Artifact
