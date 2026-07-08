@@ -372,109 +372,23 @@ jobs:
           
           echo "✅ Project Android WebView berhasil dibuat"
 
-      # ─── 8. SETUP GRADLE WRAPPER (FIXED) ──────────────────────────
+      # ─── 8. SETUP GRADLE WRAPPER (SIMPLE) ─────────────────────────
       - name: 🔧 Setup Gradle Wrapper
         run: |
-          export JAVA_HOME=$JAVA_HOME
-          export PATH=$JAVA_HOME/bin:$PATH
-          java -version
+          # Install gradle langsung via apt
+          sudo apt-get update -qq
+          sudo apt-get install -yqq gradle
           
-          # Download gradle wrapper files
-          echo "📥 Downloading gradle wrapper..."
-          mkdir -p gradle/wrapper
-          
-          # Download gradle-wrapper.jar
-          curl -L -o gradle/wrapper/gradle-wrapper.jar \
-            https://github.com/gradle/gradle/raw/v8.0.2/gradle/wrapper/gradle-wrapper.jar
-          
-          # Create gradle-wrapper.properties
-          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.0.2-bin.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          
-          # Create gradlew script
-          cat > gradlew << 'EOFGRADLEW'
-          #!/bin/sh
-          set -e
-          
-          # Determine the Java command to use
-          if [ -z "$JAVA_HOME" ]; then
-            echo "JAVA_HOME is not set"
-            exit 1
-          fi
-          
-          # Location of the gradle wrapper jar
-          GRADLE_WRAPPER_JAR="$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar"
-          
-          # Run gradle wrapper
-          exec "$JAVA_HOME/bin/java" -jar "$GRADLE_WRAPPER_JAR" "$@"
-          EOFGRADLEW
-          
+          # Buat wrapper dengan gradle yang sudah terinstall
+          gradle wrapper --gradle-version 8.0.2
           chmod +x gradlew
           
-          # Create gradlew.bat (for windows, optional)
-          cat > gradlew.bat << 'EOF'
-          @rem
-          @rem Copyright 2015 the original author or authors.
-          @rem
-          @rem Licensed under the Apache License, Version 2.0 (the "License");
-          @rem you may not use this file except in compliance with the License.
-          @rem You may obtain a copy of the License at
-          @rem
-          @rem      https://www.apache.org/licenses/LICENSE-2.0
-          @rem
-          @rem Unless required by applicable law or agreed to in writing, software
-          @rem distributed under the License is distributed on an "AS IS" BASIS,
-          @rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-          @rem See the License for the specific language governing permissions and
-          @rem limitations under the License.
-          @rem
-          
-          @if "%DEBUG%" == "" @echo off
-          @rem ##########################################################################
-          @rem
-          @rem  Gradle startup script for Windows
-          @rem
-          @rem ##########################################################################
-          
-          set DIRNAME=%~dp0
-          if "%DIRNAME%" == "" set DIRNAME=.
-          set APP_BASE_NAME=%~n0
-          set APP_HOME=%DIRNAME%
-          
-          java -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %*
-          EOF
-          
-          echo "✅ Gradle wrapper selesai disetup"
+          echo "✅ Gradle wrapper selesai"
           echo "🔍 Verifikasi:"
-          ls -la gradle/wrapper/
           ls -la gradlew
+          cat gradle/wrapper/gradle-wrapper.properties
 
-      # ─── 9. VERIFIKASI GRADLE ──────────────────────────────────────
-      - name: 🔍 Verifikasi Gradle
-        run: |
-          export JAVA_HOME=$JAVA_HOME
-          export PATH=$JAVA_HOME/bin:$PATH
-          export ANDROID_SDK_ROOT=/usr/local/android-sdk
-          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
-          
-          echo "🔍 Mengecek environment..."
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          echo ""
-          echo "🔍 Mengecek file project..."
-          ls -la
-          ls -la app/
-          ls -la gradle/wrapper/
-          echo ""
-          echo "🔍 Mengecek gradle wrapper..."
-          ./gradlew --version
-
-      # ─── 10. BUILD APK ─────────────────────────────────────────────
+      # ─── 9. BUILD APK ─────────────────────────────────────────────
       - name: 🔨 Build APK
         run: |
           export JAVA_HOME=$JAVA_HOME
@@ -486,7 +400,7 @@ jobs:
           ./gradlew assembleRelease --no-daemon --stacktrace
           echo "✅ Build selesai"
 
-      # ─── 11. FIND APK ─────────────────────────────────────────────
+      # ─── 10. FIND APK ─────────────────────────────────────────────
       - name: 🔍 Find APK
         run: |
           echo "🔍 Mencari APK..."
@@ -494,15 +408,22 @@ jobs:
           APK_PATH=$(find app/build/outputs/apk -name "*.apk" -type f | head -1)
           if [ -z "$APK_PATH" ]; then
             echo "❌ APK tidak ditemukan!"
-            echo "📂 Struktur folder:"
-            find app/build -type f 2>/dev/null | head -20 || echo "Tidak ada folder build"
-            exit 1
+            echo "📂 Struktur folder build:"
+            find app/build -type f 2>/dev/null | head -30 || echo "Tidak ada folder build"
+            # Coba build debug sebagai fallback
+            echo "🔄 Mencoba build debug..."
+            ./gradlew assembleDebug --no-daemon
+            APK_PATH=$(find app/build/outputs/apk -name "*.apk" -type f | head -1)
+            if [ -z "$APK_PATH" ]; then
+              echo "❌ APK masih tidak ditemukan!"
+              exit 1
+            fi
           fi
           echo "✅ APK ditemukan: $APK_PATH"
           echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
           ls -lh $APK_PATH
 
-      # ─── 12. UPLOAD ARTIFACT ──────────────────────────────────────
+      # ─── 11. UPLOAD ARTIFACT ──────────────────────────────────────
       - name: 📤 Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -511,7 +432,7 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      # ─── 13. UPLOAD KE RELEASE ────────────────────────────────────
+      # ─── 12. UPLOAD KE RELEASE ────────────────────────────────────
       - name: 📤 Upload to release
         uses: softprops/action-gh-release@v2
         with:
@@ -523,7 +444,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ─── 14. SUMMARY ──────────────────────────────────────────────
+      # ─── 13. SUMMARY ──────────────────────────────────────────────
       - name: 📊 Build Summary
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
