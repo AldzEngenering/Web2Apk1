@@ -456,14 +456,16 @@ jobs:
       # ─── 9. BUILD APK ─────────────────────────────────────────────
       - name: 🔨 Build APK
         run: |
-          export JAVA_HOME=$JAVA_HOME
-          export PATH=$JAVA_HOME/bin:$PATH
-          export ANDROID_SDK_ROOT=/usr/local/android-sdk
-          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
-          
-          echo "📦 Building APK..."
-          ./gradlew assembleRelease --no-daemon --stacktrace
-          echo "✅ Build selesai"
+          cd webapp
+          flutter clean
+          flutter build apk --release
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "APK_SIZE=$(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)" >> $GITHUB_OUTPUT
+            echo "✅ Build success!"
+          else
+            echo "❌ Build failed!"
+            exit 1
+          fi
 
       # ─── 10. FIND APK ─────────────────────────────────────────────
       - name: 🔍 Find APK
