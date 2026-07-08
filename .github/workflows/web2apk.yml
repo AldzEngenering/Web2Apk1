@@ -63,7 +63,7 @@ jobs:
           cd "$PROJECT_NAME"
           
           # ==================== UPDATE PUBSPEC ====================
-          cat > pubspec.yaml << 'EOF'
+          cat > pubspec.yaml << EOF
           name: $PROJECT_NAME
           description: Web to APK app
           version: 1.0.0+1
@@ -371,7 +371,7 @@ jobs:
           
           # ==================== CREATE ANDROID MANIFEST ====================
           mkdir -p android/app/src/main
-          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          cat > android/app/src/main/AndroidManifest.xml << EOF
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.web2apk.$PROJECT_NAME">
               
@@ -387,7 +387,7 @@ jobs:
               
               <application
                   android:label="${{ github.event.inputs.app_name }}"
-                  android:name="${applicationName}"
+                  android:name="\${applicationName}"
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true"
                   android:allowBackup="true"
