@@ -131,11 +131,52 @@ jobs:
           
           # Cek apakah file adalah gambar
           if ! file icon.png | grep -q "image"; then
-            echo "⚠️ File bukan gambar! Isi file:"
+            echo "⚠️ File bukan gambar langsung, mengecek apakah ini multipart/form-data..."
             head -c 200 icon.png
             echo ""
-            echo "❌ URL tidak mengembalikan gambar yang valid!"
-            exit 1
+
+            # Fallback: beberapa release asset ternyata masih terbungkus
+            # multipart/form-data (boundary + headers) karena bug di proses
+            # upload aslinya. Coba ekstrak gambar asli dari dalamnya.
+            python3 - << 'PYEOF'
+import re
+
+with open("icon.png", "rb") as f:
+    data = f.read()
+
+# Cari akhir header multipart (baris kosong setelah Content-Type)
+idx = data.find(b"\r\n\r\n")
+if idx == -1:
+    idx = data.find(b"\n\n")
+    header_len = 2
+else:
+    header_len = 4
+
+if idx != -1:
+    body = data[idx + header_len:]
+    # Buang boundary penutup di akhir file jika ada
+    end_idx = body.rfind(b"\r\n--")
+    if end_idx == -1:
+        end_idx = body.rfind(b"\n--")
+    if end_idx != -1:
+        body = body[:end_idx]
+
+    with open("icon_extracted.png", "wb") as out:
+        out.write(body)
+    print("✅ Extracted embedded file from multipart wrapper")
+else:
+    print("❌ Could not find multipart boundary in file")
+PYEOF
+
+            if [ -f icon_extracted.png ] && file icon_extracted.png | grep -q "image"; then
+              mv icon_extracted.png icon.png
+              echo "✅ Berhasil mengekstrak gambar asli dari multipart wrapper!"
+              file icon.png
+            else
+              echo "❌ URL tidak mengembalikan gambar yang valid, dan gagal mengekstrak dari multipart wrapper!"
+              echo "⚠️ Perbaiki proses upload icon di sumbernya (release asset ini masih berisi raw multipart/form-data, bukan file gambar murni)."
+              exit 1
+            fi
           fi
           
           echo "✅ Icon downloaded and validated!"
