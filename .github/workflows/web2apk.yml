@@ -4,149 +4,245 @@ on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: 'Website URL'
+        description: 'URL Website'
         required: true
         type: string
       app_name:
-        description: 'App Name'
+        description: 'Nama Aplikasi'
         required: true
         type: string
       icon_url:
-        description: 'Icon URL (PNG)'
-        required: true
+        description: 'URL Icon (Logo)'
+        required: false
         type: string
+        default: ''
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    name: Build Web to APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      # 1. Setup Flutter
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: '3.22.4'
           channel: 'stable'
-          cache: true
 
-      # 2. Setup Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
+          distribution: 'temurin'
           java-version: '17'
 
-      # 3. Setup Android SDK
-      - name: Setup Android SDK
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget unzip
-          wget -q "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip -d $HOME/android-sdk
-          mkdir -p $HOME/android-sdk/cmdline-tools/latest
-          mv $HOME/android-sdk/cmdline-tools/* $HOME/android-sdk/cmdline-tools/latest/ 2>/dev/null || true
-          echo "y" | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
+          sudo apt-get update -qq
+          sudo apt-get install -yqq unzip wget curl imagemagick file
 
-      # 4. Buat project Flutter baru dengan webview
-      - name: Create Flutter WebView Project
+      - name: Install Android SDK
         run: |
-          flutter create --org com.web2app --project-name webview_app --platforms android .
-          # Hapus default main.dart
-          rm -f lib/main.dart
-          # Buat main.dart dengan webview
+          export ANDROID_HOME=$HOME/android-sdk
+          mkdir -p $ANDROID_HOME
+          cd /tmp
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-11076708_latest.zip
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          mv cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+          echo y | sdkmanager --licenses --no_https > /dev/null 2>&1 || true
+          echo y | sdkmanager "build-tools;34.0.0" --no_https > /dev/null 2>&1 || true
+          echo y | sdkmanager "platforms;android-34" --no_https > /dev/null 2>&1 || true
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      - name: Validasi URL
+        run: |
+          URL="${{ github.event.inputs.web_url }}"
+          if [[ ! "$URL" =~ ^https?:// ]]; then
+            echo "❌ URL tidak valid: $URL"
+            exit 1
+          fi
+          echo "✅ URL valid: $URL"
+          echo "WEB_URL=$URL" >> $GITHUB_ENV
+
+      - name: Setup Nama Aplikasi
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          if [ -z "$APP_NAME" ]; then
+            APP_NAME="WebApp"
+          fi
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+          PKG=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
+          [ -z "$PKG" ] && PKG="webapp"
+          PKG="com.web2apk.$PKG"
+          echo "PKG=$PKG" >> $GITHUB_ENV
+
+      - name: Download & Validasi Icon
+        run: |
+          ICON_URL="${{ github.event.inputs.icon_url }}"
+          if [ -n "$ICON_URL" ]; then
+            echo "📥 Download icon dari: $ICON_URL"
+            curl -L -o icon_raw.png "$ICON_URL" -H "User-Agent: Mozilla/5.0" --fail --silent
+          fi
+          
+          if [ ! -f icon_raw.png ] || [ ! -s icon_raw.png ]; then
+            echo "⚠️ Icon tidak valid, membuat default..."
+            convert -size 512x512 xc:#1976D2 -fill white -gravity center -font Helvetica -pointsize 100 \
+              -annotate +0+10 "WEB" icon_work.png
+          else
+            convert icon_raw.png -resize 512x512 -background transparent -gravity center \
+              -extent 512x512 icon_work.png
+          fi
+          
+          echo "✅ Icon siap"
+          file icon_work.png
+
+      - name: Resize Icon
+        run: |
+          for size in 48 72 96 144 192 512; do
+            mkdir -p android/app/src/main/res/mipmap-${size}dpi
+            convert icon_work.png -resize ${size}x${size} -background transparent -gravity center \
+              -extent ${size}x${size} android/app/src/main/res/mipmap-${size}dpi/ic_launcher.png
+            cp android/app/src/main/res/mipmap-${size}dpi/ic_launcher.png \
+               android/app/src/main/res/mipmap-${size}dpi/ic_launcher_round.png
+          done
+          mkdir -p android/app/src/main/res/drawable
+          cp android/app/src/main/res/mipmap-192dpi/ic_launcher.png android/app/src/main/res/drawable/ic_launcher.png
+
+      - name: Create Flutter Project
+        run: |
+          flutter create --org com.web2apk --project-name webview_app --platforms android .
+          
+          # Hapus demo default
+          rm -rf lib/*
+          
+          # Buat main.dart dengan WebView
           cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
-
-          void main() => runApp(WebViewApp());
-
-          class WebViewApp extends StatelessWidget {
-            const WebViewApp({super.key});
-
+          
+          void main() => runApp(const MyApp());
+          
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+          
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: '${{ github.event.inputs.app_name }}',
-                theme: ThemeData(primarySwatch: Colors.blue),
-                home: WebView(
-                  initialUrl: '${{ github.event.inputs.web_url }}',
-                  javascriptMode: JavascriptMode.unrestricted,
-                  gestureNavigationEnabled: true,
-                  zoomEnabled: true,
+                title: 'APP_NAME_PLACEHOLDER',
+                theme: ThemeData(
+                  colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+                  useMaterial3: true,
+                ),
+                home: const WebViewScreen(),
+                debugShowCheckedModeBanner: false,
+              );
+            }
+          }
+          
+          class WebViewScreen extends StatefulWidget {
+            const WebViewScreen({super.key});
+          
+            @override
+            State<WebViewScreen> createState() => _WebViewScreenState();
+          }
+          
+          class _WebViewScreenState extends State<WebViewScreen> {
+            late final WebViewController controller;
+            bool isLoading = true;
+          
+            @override
+            void initState() {
+              super.initState();
+              final url = Uri.parse('WEB_URL_PLACEHOLDER');
+              controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onPageFinished: (_) => setState(() => isLoading = false),
+                  ),
+                )
+                ..loadRequest(url);
+            }
+          
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: Text('APP_NAME_PLACEHOLDER'),
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  foregroundColor: Colors.white,
+                ),
+                body: Stack(
+                  children: [
+                    WebViewWidget(controller: controller),
+                    if (isLoading)
+                      const Center(child: CircularProgressIndicator()),
+                  ],
                 ),
               );
             }
           }
           EOF
+          
+          sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" lib/main.dart
+          sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" lib/main.dart
 
-          # Tambahkan dependency webview_flutter
-          flutter pub add webview_flutter
-
-      # 5. Download icon
-      - name: Download Icon
+      - name: Add WebView Dependencies
         run: |
-          mkdir -p android/app/src/main/res
-          wget -q "${{ github.event.inputs.icon_url }}" -O icon_temp.png
-          # Convert to proper icon sizes
-          mkdir -p android/app/src/main/res/mipmap-hdpi
-          mkdir -p android/app/src/main/res/mipmap-mdpi
-          mkdir -p android/app/src/main/res/mipmap-xhdpi
-          mkdir -p android/app/src/main/res/mipmap-xxhdpi
-          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
-          # Gunakan convert dari ImageMagick (bisa juga pakai sharp lewat npm)
-          sudo apt-get install -y imagemagick
-          convert icon_temp.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
-          convert icon_temp.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
-          convert icon_temp.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
-          convert icon_temp.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-          convert icon_temp.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          rm -f icon_temp.png
+          cat >> pubspec.yaml << 'EOF'
+          
+          dependencies:
+            webview_flutter: ^4.7.0
+          EOF
 
-      # 6. Ganti nama aplikasi di AndroidManifest.xml
-      - name: Update App Name
+      - name: Konfigurasi Android Manifest
         run: |
-          sed -i 's/android:label="webview_app"/android:label="${{ github.event.inputs.app_name }}"/g' android/app/src/main/AndroidManifest.xml || true
+          PKG="${{ env.PKG }}"
+          APP_NAME="${{ env.APP_NAME }}"
+          
+          # Update manifest
+          sed -i "s|package=\".*\"|package=\"$PKG\"|" android/app/src/main/AndroidManifest.xml
+          sed -i "s|android:label=\".*\"|android:label=\"$APP_NAME\"|" android/app/src/main/AndroidManifest.xml
+          
+          # Tambahkan internet permission
+          sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
+          sed -i '/<application/a \        android:usesCleartextTraffic="true"' android/app/src/main/AndroidManifest.xml
 
-      # 7. Flutter build
+      - name: Update build.gradle
+        run: |
+          PKG="${{ env.PKG }}"
+          sed -i "s|applicationId .*|applicationId \"$PKG\"|" android/app/build.gradle
+          sed -i "s|minSdk .*|minSdk 21|" android/app/build.gradle
+          sed -i "s|targetSdk .*|targetSdk 34|" android/app/build.gradle
+          sed -i "s|compileSdk .*|compileSdk 34|" android/app/build.gradle
+
       - name: Build APK
+        id: build
         run: |
+          flutter clean
           flutter pub get
-          flutter build apk --release --split-per-abi
-
-      # 8. Verifikasi struktur APK
-      - name: Verify APK Structure
-        run: |
-          APK_FILE=$(ls build/app/outputs/flutter-apk/*.apk 2>/dev/null | head -1)
-          if [ -n "$APK_FILE" ]; then
-            echo "✅ APK ditemukan: $APK_FILE"
-            echo "Struktur internal APK:"
-            unzip -l "$APK_FILE" | grep -E "classes.dex|resources.arsc|AndroidManifest.xml|assets/flutter_assets|assets/dexopt|lib/|res/|META-INF"
+          flutter build apk --release --no-tree-shake-icons
+          
+          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          if [ -f "$APK_PATH" ]; then
+            APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+            echo "APK_SIZE=$APK_SIZE" >> $GITHUB_OUTPUT
+            echo "✅ Build sukses! APK size: $APK_SIZE"
           else
-            echo "❌ APK tidak ditemukan!"
+            echo "❌ Build gagal!"
+            ls -la build/app/outputs/flutter-apk/ || true
             exit 1
           fi
 
-      # 9. Upload APK sebagai artifact
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-apk
-          path: build/app/outputs/flutter-apk/*.apk
-          if-no-files-found: error
-          retention-days: 7
-
-      # 10. Upload ke release
-      - name: Upload to Release
-        if: success()
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: build/app/outputs/flutter-apk/app-release.apk
-          asset_name: ${{ github.event.inputs.app_name }}-webapp.apk
-          asset_content_type: application/vnd.android.package-archive
+          name: ${{ env.APP_NAME }}-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
