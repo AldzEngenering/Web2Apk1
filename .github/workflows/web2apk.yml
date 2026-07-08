@@ -12,21 +12,24 @@ on:
         required: true
         type: string
       icon_url:
-        description: 'URL Icon (Logo)'
-        required: true
+        description: 'URL Icon (Logo) - Bisa kosong, akan pakai default'
+        required: false
         type: string
+        default: ''
 
 jobs:
   build:
     name: Build Web to APK
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ─── SETUP FLUTTER ──────────────────────────────────
+      # ──────────────────────────────────────────────
+      # 1. SETUP FLUTTER
+      # ──────────────────────────────────────────────
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -34,40 +37,49 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # ─── SETUP JAVA ─────────────────────────────────────
+      # ──────────────────────────────────────────────
+      # 2. SETUP JAVA
+      # ──────────────────────────────────────────────
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # ─── INSTALL ANDROID SDK MANUALLY ──────────────────
-      - name: Install Android SDK (Manual)
+      # ──────────────────────────────────────────────
+      # 3. INSTALL ANDROID SDK (MANUAL - STABLE)
+      # ──────────────────────────────────────────────
+      - name: Install Android SDK (Manual Stable)
         run: |
+          echo "📦 Installing Android SDK..."
+          
           # Download command line tools
           cd /tmp
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q commandlinetools-linux-11076708_latest.zip
           
-          # Setup Android SDK
+          # Setup SDK
           mkdir -p $ANDROID_HOME/cmdline-tools
           mv cmdline-tools $ANDROID_HOME/cmdline-tools/latest
           
           # Set path
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
           
-          # Accept ALL licenses WITHOUT preview
-          echo "✅ Accepting Android SDK licenses..."
+          # Accept ALL licenses (silent)
+          echo "✅ Accepting licenses..."
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           
-          # Install specific build tools (STABLE, not preview)
-          sdkmanager "build-tools;34.0.0" --no_https
-          sdkmanager "platforms;android-34" --no_https
-          sdkmanager "platform-tools" --no_https
+          # Install STABLE build tools (BUKAN preview)
+          echo "📦 Installing build-tools..."
+          sdkmanager "build-tools;34.0.0" --no_https > /dev/null 2>&1
+          sdkmanager "platforms;android-34" --no_https > /dev/null 2>&1
+          sdkmanager "platform-tools" --no_https > /dev/null 2>&1
           
-          echo "✅ Android SDK installed!"
+          echo "✅ Android SDK installed successfully!"
 
-      # ─── INSTALL SYSTEM DEPENDENCIES ──────────────────
+      # ──────────────────────────────────────────────
+      # 4. INSTALL SYSTEM DEPENDENCIES
+      # ──────────────────────────────────────────────
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -80,80 +92,165 @@ jobs:
             curl \
             wget \
             imagemagick \
-            file
+            file \
+            fonts-dejavu-core
 
-      # ─── CREATE FLUTTER PROJECT ────────────────────────
+      # ──────────────────────────────────────────────
+      # 5. CREATE FLUTTER PROJECT
+      # ──────────────────────────────────────────────
       - name: Create Flutter project
+        id: create_project
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
           
+          # Jika package_name kosong, pakai default
+          if [ -z "$PACKAGE_NAME" ]; then
+            PACKAGE_NAME="webapp"
+          fi
+          
           echo "📱 Creating project: $PACKAGE_NAME"
+          echo "APP_NAME: $APP_NAME"
           
           flutter create --org com.web2apk --project-name "$PACKAGE_NAME" webapp
           
           echo "✅ Project created!"
 
-      # ─── ADD WEBVIEW FLUTTER ───────────────────────────
+      # ──────────────────────────────────────────────
+      # 6. ADD WEBVIEW FLUTTER (TANPA DUPLICATE)
+      # ──────────────────────────────────────────────
       - name: Add webview_flutter dependency
         run: |
           cd webapp
           
-          if grep -q "^dependencies:" pubspec.yaml; then
-            sed -i '/^dependencies:/a\  webview_flutter: ^4.7.0' pubspec.yaml
-          else
-            echo "" >> pubspec.yaml
-            echo "dependencies:" >> pubspec.yaml
-            echo "  webview_flutter: ^4.7.0" >> pubspec.yaml
+          # Cek dan tambahkan dependency dengan aman
+          if ! grep -q "webview_flutter" pubspec.yaml; then
+            if grep -q "^dependencies:" pubspec.yaml; then
+              sed -i '/^dependencies:/a\  webview_flutter: ^4.7.0' pubspec.yaml
+            else
+              echo "" >> pubspec.yaml
+              echo "dependencies:" >> pubspec.yaml
+              echo "  webview_flutter: ^4.7.0" >> pubspec.yaml
+            fi
           fi
+          
+          # Tampilkan pubspec.yaml untuk debugging
+          echo "📄 pubspec.yaml:"
+          cat pubspec.yaml
           
           flutter pub get
           echo "✅ Dependencies installed!"
 
-      # ─── DOWNLOAD ICON ──────────────────────────────────
+      # ──────────────────────────────────────────────
+      # 7. DOWNLOAD & VALIDATE ICON
+      # ──────────────────────────────────────────────
       - name: Download and validate icon
         id: download_icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
-          echo "🖼️ Downloading icon from: $ICON_URL"
           
+          # Buat folder icon
           mkdir -p webapp/android/app/src/main/res/mipmap-hdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-mdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxxhdpi
           
+          # Jika URL kosong, buat default
+          if [ -z "$ICON_URL" ]; then
+            echo "⚠️ No icon URL provided, using default icon..."
+            echo "default" > /tmp/use_default_icon
+            exit 0
+          fi
+          
+          echo "🖼️ Downloading icon from: $ICON_URL"
+          
+          # Download dengan multiple headers
           curl -L -o icon.png \
-            -H "User-Agent: Mozilla/5.0" \
-            -H "Accept: image/*" \
-            "$ICON_URL"
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            -H "Accept: image/webp,image/apng,image/*,*/*;q=0.8" \
+            -H "Accept-Encoding: gzip, deflate, br" \
+            --max-time 30 \
+            "$ICON_URL" || echo "⚠️ Download failed, will use default icon"
           
+          # Validasi file
           if [ ! -s icon.png ]; then
-            echo "❌ File icon kosong!"
-            exit 1
+            echo "⚠️ File empty or download failed, using default icon..."
+            echo "default" > /tmp/use_default_icon
+            exit 0
           fi
           
-          if ! file icon.png | grep -q "image"; then
-            echo "⚠️ File bukan gambar!"
-            exit 1
+          # Cek tipe file
+          FILE_TYPE=$(file icon.png | head -1)
+          echo "📋 File type: $FILE_TYPE"
+          
+          if echo "$FILE_TYPE" | grep -qi "image"; then
+            echo "✅ Valid image detected!"
+          else
+            echo "⚠️ Not a valid image, using default icon..."
+            echo "default" > /tmp/use_default_icon
+            rm -f icon.png
+            exit 0
           fi
           
-          echo "✅ Icon downloaded!"
+          echo "✅ Icon downloaded and validated!"
 
-      # ─── RESIZE ICON ────────────────────────────────────
-      - name: Resize icon
+      # ──────────────────────────────────────────────
+      # 8. RESIZE ICON (ATAU BUAT DEFAULT)
+      # ──────────────────────────────────────────────
+      - name: Resize icon or create default
         run: |
-          echo "🖼️ Resizing icon..."
+          echo "🖼️ Processing icon..."
           
+          # Jika pakai default atau icon tidak ada
+          if [ -f /tmp/use_default_icon ] || [ ! -f icon.png ]; then
+            echo "📦 Creating default icon..."
+            
+            # Buat icon default dengan gradient biru
+            convert -size 512x512 gradient:blue-lightblue \
+              -fill white -gravity center \
+              -font DejaVu-Sans -pointsize 120 \
+              -draw "text 0,0 'WEB'" \
+              -gravity south -pointsize 40 \
+              -draw "text 0,0 '${{ github.event.inputs.app_name }}'" \
+              icon_default.png
+            
+            # Gunakan icon default untuk semua resolusi
+            for size in 48 72 96 144 192; do
+              case $size in
+                48) folder="mipmap-mdpi" ;;
+                72) folder="mipmap-hdpi" ;;
+                96) folder="mipmap-xhdpi" ;;
+                144) folder="mipmap-xxhdpi" ;;
+                192) folder="mipmap-xxxhdpi" ;;
+              esac
+              convert icon_default.png -resize ${size}x${size} \
+                webapp/android/app/src/main/res/$folder/ic_launcher.png
+            done
+            
+            echo "✅ Default icon created!"
+            exit 0
+          fi
+          
+          # Resize icon yang sudah didownload
+          echo "🖼️ Resizing downloaded icon..."
+          
+          # Resize ke semua resolusi
           convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
           convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
           convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
           convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           
-          echo "✅ Icon resized!"
+          echo "✅ Icon resized successfully!"
+          
+          # Tampilkan hasil
+          echo "📋 Resized icons:"
+          ls -la webapp/android/app/src/main/res/mipmap-*/ic_launcher.png 2>/dev/null || echo "No icons found"
 
-      # ─── GENERATE WEBVIEW CODE ──────────────────────────
+      # ──────────────────────────────────────────────
+      # 9. GENERATE WEBVIEW CODE
+      # ──────────────────────────────────────────────
       - name: Generate WebView code
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
@@ -193,12 +290,32 @@ jobs:
           
           class _WebViewScreenState extends State<WebViewScreen> {
             late final WebViewController controller;
+            bool _isLoading = true;
           
             @override
             void initState() {
               super.initState();
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onPageStarted: (String url) {
+                      setState(() {
+                        _isLoading = true;
+                      });
+                    },
+                    onPageFinished: (String url) {
+                      setState(() {
+                        _isLoading = false;
+                      });
+                    },
+                    onWebResourceError: (WebResourceError error) {
+                      setState(() {
+                        _isLoading = false;
+                      });
+                    },
+                  ),
+                )
                 ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
             }
           
@@ -211,53 +328,85 @@ jobs:
                   backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,
                 ),
-                body: WebViewWidget(controller: controller),
+                body: Stack(
+                  children: [
+                    WebViewWidget(controller: controller),
+                    if (_isLoading)
+                      const Center(
+                        child: CircularProgressIndicator(),
+                      ),
+                  ],
+                ),
               );
             }
           }
           EOF
           
+          # Ganti placeholder
           sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" webapp/lib/main.dart
           sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" webapp/lib/main.dart
           
           echo "✅ WebView code generated!"
 
-      # ─── UPDATE ANDROID MANIFEST ──────────────────────
+      # ──────────────────────────────────────────────
+      # 10. UPDATE ANDROID MANIFEST
+      # ──────────────────────────────────────────────
       - name: Update Android Manifest
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           
-          sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' \
-            webapp/android/app/src/main/AndroidManifest.xml
+          cd webapp
           
-          if ! grep -q "android.permission.INTERNET" webapp/android/app/src/main/AndroidManifest.xml; then
+          # Ganti label aplikasi
+          sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' \
+            android/app/src/main/AndroidManifest.xml
+          
+          # Tambahkan INTERNET permission
+          if ! grep -q "android.permission.INTERNET" android/app/src/main/AndroidManifest.xml; then
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' \
-              webapp/android/app/src/main/AndroidManifest.xml
+              android/app/src/main/AndroidManifest.xml
           fi
           
+          # Tambahkan usesCleartextTraffic untuk http
+          sed -i 's|<application|<application android:usesCleartextTraffic="true"|g' \
+            android/app/src/main/AndroidManifest.xml
+          
           echo "✅ Android Manifest updated!"
+          
+          # Tampilkan manifest
+          echo "📄 AndroidManifest.xml:"
+          cat android/app/src/main/AndroidManifest.xml
 
-      # ─── BUILD APK ──────────────────────────────────────
+      # ──────────────────────────────────────────────
+      # 11. BUILD APK
+      # ──────────────────────────────────────────────
       - name: Build APK
         id: build_apk
         run: |
           cd webapp
           
           echo "🔨 Building APK..."
+          echo "⏳ This may take a few minutes..."
+          
           flutter build apk --release
           
           APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
           
           if [ -f "$APK_PATH" ]; then
-            echo "✅ APK built!"
-            echo "APK_SIZE=$(du -h $APK_PATH | cut -f1)" >> $GITHUB_OUTPUT
+            APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+            echo "✅ APK built successfully!"
+            echo "📱 Size: $APK_SIZE"
+            echo "APK_SIZE=$APK_SIZE" >> $GITHUB_OUTPUT
           else
             echo "❌ APK not found!"
+            echo "📂 Checking build output:"
             find . -name "*.apk" 2>/dev/null || echo "No APK found"
             exit 1
           fi
 
-      # ─── UPLOAD APK ────────────────────────────────────
+      # ──────────────────────────────────────────────
+      # 12. UPLOAD APK
+      # ──────────────────────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -266,7 +415,9 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-      # ─── BUILD SUMMARY ─────────────────────────────────
+      # ──────────────────────────────────────────────
+      # 13. BUILD SUMMARY
+      # ──────────────────────────────────────────────
       - name: Build Summary
         run: |
           echo "## ✅ Web to APK Successful!" >> $GITHUB_STEP_SUMMARY
@@ -276,3 +427,9 @@ jobs:
           echo "| App Name | ${{ github.event.inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Web URL | ${{ github.event.inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
           echo "| APK Size | ${{ steps.build_apk.outputs.APK_SIZE }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          
+      - name: Show APK location
+        run: |
+          echo "📱 APK Location:"
+          find . -name "*.apk" -type f -exec ls -la {} \;
