@@ -33,7 +33,6 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
-          # Remove cache to avoid lock file errors
           
       # ==================== SETUP FLUTTER ====================
       - name: Setup Flutter
@@ -126,7 +125,6 @@ jobs:
           import 'package:connectivity_plus/connectivity_plus.dart';
           import 'package:permission_handler/permission_handler.dart';
           import 'package:device_info_plus/device_info_plus.dart';
-          import 'package:cached_network_image/cached_network_image.dart';
           
           void main() {
             runApp(const MyApp());
@@ -175,10 +173,10 @@ jobs:
               if (Platform.isAndroid) {
                 final androidInfo = await DeviceInfoPlugin().androidInfo;
                 if (androidInfo.version.sdkInt >= 33) {
-                  await [
-                    Permission.notifications,
-                  ].request();
+                  // Request notification permission for Android 13+
+                  await Permission.notification.request();
                 }
+                // Request other permissions
                 await [
                   Permission.storage,
                   Permission.camera,
@@ -198,13 +196,7 @@ jobs:
             }
             
             void _initializeWebView() {
-              final platform = WebViewPlatform.instance;
-              if (platform is AndroidWebViewPlatform) {
-                platform.platformParams = const AndroidWebViewPlatformParams(
-                  useHybridComposition: true,
-                );
-              }
-              
+              // Use WebViewWidget instead of deprecated platform params
               _controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
                 ..setBackgroundColor(const Color(0x00000000))
@@ -414,18 +406,44 @@ jobs:
           </manifest>
           EOF
           
-          # ==================== DOWNLOAD ICON ====================
-          echo "🖼️ Downloading icon..."
+          # ==================== DOWNLOAD AND CONVERT ICON ====================
+          echo "🖼️ Downloading and converting icon..."
           mkdir -p assets/icon
           mkdir -p assets/splash
           
-          curl -L -o assets/icon/icon.png "${{ github.event.inputs.icon_url }}" || echo "⚠️ Icon download failed, using default"
+          # Download icon
+          curl -L -o assets/icon/icon_original.png "${{ github.event.inputs.icon_url }}" || echo "⚠️ Icon download failed"
+          
+          # Convert to PNG if needed using ImageMagick
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          
+          # Convert to PNG format with proper dimensions
+          if [ -f assets/icon/icon_original.png ]; then
+            # Convert to 512x512 PNG
+            convert assets/icon/icon_original.png -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null || \
+            convert assets/icon/icon_original.png -resize 512x512 assets/icon/icon.png 2>/dev/null || \
+            cp assets/icon/icon_original.png assets/icon/icon.png
+          else
+            # Create default icon if download failed
+            echo "Creating default icon..."
+            convert -size 512x512 xc:blue -fill white -gravity center -pointsize 100 -draw "text 0,0 'APP'" assets/icon/icon.png
+          fi
           
           # Copy icon as splash
           cp assets/icon/icon.png assets/splash/splash.png 2>/dev/null || echo "⚠️ No icon for splash"
           
           # ==================== GENERATE SPLASH ====================
           echo "🖼️ Generating splash screen..."
+          # Create splash config file
+          cat > flutter_native_splash.yaml << EOF
+          flutter_native_splash:
+            color: "#ffffff"
+            image: assets/splash/splash.png
+            android: true
+            ios: false
+          EOF
+          
           flutter pub get
           flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
           
