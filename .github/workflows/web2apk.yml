@@ -21,109 +21,67 @@ jobs:
   build:
     name: Build Web to APK
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ──────────────────────────────────────────────
-      # 1. SETUP FLUTTER (VERSION STABLE)
-      # ──────────────────────────────────────────────
+      # ─── SETUP FLUTTER ──────────────────────────────
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: 'stable'
-          cache: true
 
-      # ──────────────────────────────────────────────
-      # 2. SETUP JAVA
-      # ──────────────────────────────────────────────
+      # ─── SETUP JAVA ──────────────────────────────────
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # ──────────────────────────────────────────────
-      # 3. INSTALL ANDROID SDK
-      # ──────────────────────────────────────────────
+      # ─── INSTALL ANDROID SDK ─────────────────────────
       - name: Install Android SDK
         run: |
-          echo "📦 Installing Android SDK..."
-          
+          sudo apt-get update
+          sudo apt-get install -y unzip wget curl imagemagick
+
           cd /tmp
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q commandlinetools-linux-11076708_latest.zip
-          
           mkdir -p $ANDROID_HOME/cmdline-tools
           mv cmdline-tools $ANDROID_HOME/cmdline-tools/latest
           
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "build-tools;34.0.0" --no_https > /dev/null 2>&1
-          sdkmanager "platforms;android-34" --no_https > /dev/null 2>&1
-          sdkmanager "platform-tools" --no_https > /dev/null 2>&1
-          
-          echo "✅ Android SDK installed!"
+          sdkmanager "build-tools;34.0.0" > /dev/null 2>&1
+          sdkmanager "platforms;android-34" > /dev/null 2>&1
 
-      # ──────────────────────────────────────────────
-      # 4. INSTALL DEPENDENCIES
-      # ──────────────────────────────────────────────
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ninja-build \
-            libgtk-3-dev \
-            liblzma-dev \
-            git \
-            unzip \
-            curl \
-            wget \
-            imagemagick \
-            file \
-            fonts-dejavu-core
-
-      # ──────────────────────────────────────────────
-      # 5. CREATE FLUTTER PROJECT
-      # ──────────────────────────────────────────────
+      # ─── CREATE PROJECT ─────────────────────────────
       - name: Create Flutter project
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
-          PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
+          PKG=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
+          [ -z "$PKG" ] && PKG="webapp"
           
-          if [ -z "$PACKAGE_NAME" ]; then
-            PACKAGE_NAME="webapp"
-          fi
-          
-          echo "📱 Creating project: $PACKAGE_NAME"
-          echo "APP_NAME: $APP_NAME"
-          
-          flutter create --org com.web2apk --project-name "$PACKAGE_NAME" webapp
-          
-          echo "✅ Project created!"
+          flutter create --org com.web2apk --project-name "$PKG" webapp
+          echo "PKG=$PKG" >> $GITHUB_ENV
 
-      # ──────────────────────────────────────────────
-      # 6. CONFIGURE GRADLE & KOTLIN
-      # ──────────────────────────────────────────────
-      - name: Configure Gradle & Kotlin
+      # ─── FIX GRADLE (SEDERHANA) ──────────────────────
+      - name: Fix Gradle
         run: |
           cd webapp
           
-          # ─── ANDROID/build.gradle ───
+          # Android build.gradle
           cat > android/build.gradle << 'EOF'
           buildscript {
-              ext.kotlin_version = '1.9.0'
               repositories {
                   google()
                   mavenCentral()
               }
               dependencies {
-                  classpath 'com.android.tools.build:gradle:7.3.0'
-                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+                  classpath 'com.android.tools.build:gradle:7.1.2'
               }
           }
           
@@ -133,162 +91,113 @@ jobs:
                   mavenCentral()
               }
           }
-          
-          rootProject.buildDir = '../build'
-          subprojects {
-              project.buildDir = "${rootProject.buildDir}/${project.name}"
-          }
-          subprojects {
-              project.evaluationDependsOn(':app')
-          }
-          
-          tasks.register('clean', Delete) {
-              delete rootProject.buildDir
-          }
           EOF
           
-          # ─── APP/build.gradle ───
+          # App build.gradle
           cat > android/app/build.gradle << 'EOF'
-          plugins {
-              id 'com.android.application'
-              id 'kotlin-android'
+          def localProperties = new Properties()
+          def localPropertiesFile = rootProject.file('local.properties')
+          if (localPropertiesFile.exists()) {
+              localPropertiesFile.withReader('UTF-8') { reader ->
+                  localProperties.load(reader)
+              }
           }
           
+          def flutterRoot = localProperties.getProperty('flutter.sdk')
+          if (flutterRoot == null) {
+              throw new GradleException("Flutter SDK not found.")
+          }
+          
+          def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+          if (flutterVersionCode == null) {
+              flutterVersionCode = '1'
+          }
+          
+          def flutterVersionName = localProperties.getProperty('flutter.versionName')
+          if (flutterVersionName == null) {
+              flutterVersionName = '1.0'
+          }
+          
+          apply plugin: 'com.android.application'
+          apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+          
           android {
-              namespace 'com.web2apk.PACKAGE_NAME_PLACEHOLDER'
-              compileSdk 34
-              
-              defaultConfig {
-                  applicationId 'com.web2apk.PACKAGE_NAME_PLACEHOLDER'
-                  minSdkVersion 21
-                  targetSdkVersion 34
-                  versionCode 1
-                  versionName '1.0'
-              }
-              
-              buildTypes {
-                  release {
-                      minifyEnabled true
-                      proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-                  }
-              }
-              
+              compileSdkVersion 34
+              ndkVersion flutter.ndkVersion
+          
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
-              
-              kotlinOptions {
-                  jvmTarget = '17'
+          
+              defaultConfig {
+                  applicationId "com.web2apk.PKG_PLACEHOLDER"
+                  minSdkVersion 21
+                  targetSdkVersion 34
+                  versionCode flutterVersionCode.toInteger()
+                  versionName flutterVersionName
+              }
+          
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.debug
+                  }
               }
           }
           
-          dependencies {
-              implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
-              implementation 'androidx.core:core-ktx:1.10.1'
+          flutter {
+              source '../..'
           }
           EOF
           
-          # Ganti PACKAGE_NAME
-          PACKAGE_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
-          if [ -z "$PACKAGE_NAME" ]; then
-            PACKAGE_NAME="webapp"
-          fi
+          sed -i "s/PKG_PLACEHOLDER/${{ env.PKG }}/g" android/app/build.gradle
           
-          sed -i "s/PACKAGE_NAME_PLACEHOLDER/$PACKAGE_NAME/g" android/app/build.gradle
-          
-          echo "✅ Gradle & Kotlin configured!"
+          echo "✅ Gradle fixed!"
 
-      # ──────────────────────────────────────────────
-      # 7. ADD WEBVIEW FLUTTER
-      # ──────────────────────────────────────────────
-      - name: Add webview_flutter dependency
+      # ─── ADD WEBVIEW ──────────────────────────────────
+      - name: Add webview
         run: |
           cd webapp
-          
-          if ! grep -q "webview_flutter" pubspec.yaml; then
-            if grep -q "^dependencies:" pubspec.yaml; then
-              sed -i '/^dependencies:/a\  webview_flutter: ^4.7.0' pubspec.yaml
-            else
-              echo "" >> pubspec.yaml
-              echo "dependencies:" >> pubspec.yaml
-              echo "  webview_flutter: ^4.7.0" >> pubspec.yaml
-            fi
-          fi
-          
+          sed -i '/^dependencies:/a\  webview_flutter: ^4.7.0' pubspec.yaml
           flutter pub get
-          echo "✅ Dependencies installed!"
 
-      # ──────────────────────────────────────────────
-      # 8. FIX ANDROID MANIFEST
-      # ──────────────────────────────────────────────
-      - name: Fix AndroidManifest.xml
+      # ─── FIX MANIFEST ─────────────────────────────────
+      - name: Fix Manifest
         run: |
           cd webapp
-          
           APP_NAME="${{ github.event.inputs.app_name }}"
           
-          # Hapus semua label yang ada
           sed -i 's/android:label="[^"]*"//g' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<application android:usesCleartextTraffic="true"|g' android/app/src/main/AndroidManifest.xml
           
-          # Tambahkan label baru
-          sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' \
-            android/app/src/main/AndroidManifest.xml
-          
-          # Tambahkan usesCleartextTraffic
-          sed -i 's|<application|<application android:usesCleartextTraffic="true"|g' \
-            android/app/src/main/AndroidManifest.xml
-          
-          # Tambahkan INTERNET permission
-          if ! grep -q "android.permission.INTERNET" android/app/src/main/AndroidManifest.xml; then
-            sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' \
-              android/app/src/main/AndroidManifest.xml
+          if ! grep -q "INTERNET" android/app/src/main/AndroidManifest.xml; then
+            sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
           fi
-          
-          echo "✅ AndroidManifest fixed!"
 
-      # ──────────────────────────────────────────────
-      # 9. DOWNLOAD & RESIZE ICON
-      # ──────────────────────────────────────────────
+      # ─── ICON ──────────────────────────────────────────
       - name: Setup icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
           
-          mkdir -p webapp/android/app/src/main/res/mipmap-hdpi
-          mkdir -p webapp/android/app/src/main/res/mipmap-mdpi
-          mkdir -p webapp/android/app/src/main/res/mipmap-xhdpi
-          mkdir -p webapp/android/app/src/main/res/mipmap-xxhdpi
-          mkdir -p webapp/android/app/src/main/res/mipmap-xxxhdpi
+          mkdir -p webapp/android/app/src/main/res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}
           
-          # Coba download icon
           if [ -n "$ICON_URL" ]; then
-            echo "🖼️ Downloading icon..."
             curl -L -o icon.png -H "User-Agent: Mozilla/5.0" --max-time 30 "$ICON_URL" || true
           fi
           
-          # Jika icon tidak valid, buat default
-          if [ ! -f icon.png ] || [ ! -s icon.png ] || ! file icon.png | grep -qi "image"; then
-            echo "📦 Creating default icon..."
-            convert -size 512x512 xc:blue \
-              -fill white -gravity center \
-              -font DejaVu-Sans -pointsize 120 \
-              -draw "text 0,0 'WEB'" \
-              icon.png
+          if [ ! -f icon.png ] || ! file icon.png | grep -qi "image"; then
+            convert -size 512x512 xc:blue -fill white -gravity center -font DejaVu-Sans -pointsize 120 -draw "text 0,0 'WEB'" icon.png
           fi
           
-          # Resize ke semua resolusi
           convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
           convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
           convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
           convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          
-          echo "✅ Icon ready!"
 
-      # ──────────────────────────────────────────────
-      # 10. GENERATE WEBVIEW CODE
-      # ──────────────────────────────────────────────
-      - name: Generate WebView code
+      # ─── MAIN.DART ─────────────────────────────────────
+      - name: Generate main.dart
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           WEB_URL="${{ github.event.inputs.web_url }}"
@@ -297,62 +206,33 @@ jobs:
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
           
-          void main() {
-            runApp(const MyApp());
-          }
+          void main() => runApp(MyApp());
           
           class MyApp extends StatelessWidget {
-            const MyApp({super.key});
-          
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
                 title: 'APP_NAME_PLACEHOLDER',
-                theme: ThemeData(
-                  primarySwatch: Colors.blue,
-                  useMaterial3: true,
-                ),
-                home: const WebViewScreen(),
+                theme: ThemeData(primarySwatch: Colors.blue),
+                home: WebViewScreen(),
                 debugShowCheckedModeBanner: false,
               );
             }
           }
           
           class WebViewScreen extends StatefulWidget {
-            const WebViewScreen({super.key});
-          
             @override
-            State<WebViewScreen> createState() => _WebViewScreenState();
+            _WebViewScreenState createState() => _WebViewScreenState();
           }
           
           class _WebViewScreenState extends State<WebViewScreen> {
-            late final WebViewController controller;
-            bool _isLoading = true;
+            late WebViewController controller;
           
             @override
             void initState() {
               super.initState();
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..setNavigationDelegate(
-                  NavigationDelegate(
-                    onPageStarted: (String url) {
-                      setState(() {
-                        _isLoading = true;
-                      });
-                    },
-                    onPageFinished: (String url) {
-                      setState(() {
-                        _isLoading = false;
-                      });
-                    },
-                    onWebResourceError: (WebResourceError error) {
-                      setState(() {
-                        _isLoading = false;
-                      });
-                    },
-                  ),
-                )
                 ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
             }
           
@@ -361,19 +241,10 @@ jobs:
               return Scaffold(
                 appBar: AppBar(
                   title: Text('APP_NAME_PLACEHOLDER'),
-                  centerTitle: true,
                   backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,
                 ),
-                body: Stack(
-                  children: [
-                    WebViewWidget(controller: controller),
-                    if (_isLoading)
-                      const Center(
-                        child: CircularProgressIndicator(),
-                      ),
-                  ],
-                ),
+                body: WebViewWidget(controller: controller),
               );
             }
           }
@@ -381,58 +252,27 @@ jobs:
           
           sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" webapp/lib/main.dart
           sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" webapp/lib/main.dart
-          
-          echo "✅ WebView code generated!"
 
-      # ──────────────────────────────────────────────
-      # 11. BUILD APK
-      # ──────────────────────────────────────────────
+      # ─── BUILD ──────────────────────────────────────────
       - name: Build APK
-        id: build_apk
+        id: build
         run: |
           cd webapp
-          
-          echo "🔨 Building APK..."
-          
-          # Clean
           flutter clean
-          
-          # Build
           flutter build apk --release
           
-          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
-          
-          if [ -f "$APK_PATH" ]; then
-            APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
-            echo "✅ APK built successfully!"
-            echo "📱 Size: $APK_SIZE"
-            echo "APK_SIZE=$APK_SIZE" >> $GITHUB_OUTPUT
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "APK_SIZE=$(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)" >> $GITHUB_OUTPUT
+            echo "✅ Build success!"
           else
-            echo "❌ APK not found!"
-            find . -name "*.apk" 2>/dev/null || echo "No APK found"
+            echo "❌ Build failed!"
             exit 1
           fi
 
-      # ──────────────────────────────────────────────
-      # 12. UPLOAD APK
-      # ──────────────────────────────────────────────
+      # ─── UPLOAD ─────────────────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: webapp-apk
           path: webapp/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
-          if-no-files-found: error
-
-      # ──────────────────────────────────────────────
-      # 13. BUILD SUMMARY
-      # ──────────────────────────────────────────────
-      - name: Build Summary
-        run: |
-          echo "## ✅ Web to APK Successful!" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| App Name | ${{ github.event.inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Web URL | ${{ github.event.inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| APK Size | ${{ steps.build_apk.outputs.APK_SIZE }} |" >> $GITHUB_STEP_SUMMARY
