@@ -375,12 +375,19 @@ jobs:
       # ─── 8. SETUP GRADLE WRAPPER ──────────────────────────────────
       - name: 🔧 Setup Gradle Wrapper
         run: |
-          export JAVA_HOME=$JAVA_HOME
-          export PATH=$JAVA_HOME/bin:$PATH
-          java -version
-          gradle wrapper --gradle-version 7.1.2
-          chmod +x gradlew
-
+        cd webapp
+          mkdir -p gradle/wrapper
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-7.5-all.zip
+          EOF
+          cd gradle/wrapper
+          wget -q https://raw.githubusercontent.com/gradle/gradle/v7.5.0/gradle/wrapper/gradle-wrapper.jar
+          cd ../..
+          
       # ─── 9. DEBUG GRADLE ──────────────────────────────────────────
       - name: 🔍 Debug Gradle
         run: |
