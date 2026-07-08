@@ -4,137 +4,148 @@ on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: 'URL Website'
+        description: 'Website URL'
         required: true
         type: string
       app_name:
-        description: 'Nama Aplikasi'
+        description: 'App Name'
         required: true
         type: string
       icon_url:
-        description: 'URL Icon (Logo)'
-        required: false
+        description: 'Icon URL'
+        required: true
         type: string
-        default: ''
 
 jobs:
   build:
     name: Build Web to APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 35
+    
     steps:
-      - name: Checkout repository
+      # ==================== CHECKOUT ====================
+      - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+        
+      # ==================== SETUP NODE ====================
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          flutter-version: '3.22.4'
-          channel: 'stable'
-
+          node-version: '20'
+          cache: 'npm'
+          
+      # ==================== SETUP JAVA ====================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: 'zulu'
           java-version: '17'
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -yqq unzip wget curl imagemagick file
-
-      - name: Install Android SDK
-        run: |
-          export ANDROID_HOME=$HOME/android-sdk
-          mkdir -p $ANDROID_HOME
-          cd /tmp
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip
-          mkdir -p $ANDROID_HOME/cmdline-tools
-          mv cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          echo y | sdkmanager --licenses --no_https > /dev/null 2>&1 || true
-          echo y | sdkmanager "build-tools;34.0.0" --no_https > /dev/null 2>&1 || true
-          echo y | sdkmanager "platforms;android-34" --no_https > /dev/null 2>&1 || true
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
-
-      - name: Validasi URL
-        run: |
-          URL="${{ github.event.inputs.web_url }}"
-          if [[ ! "$URL" =~ ^https?:// ]]; then
-            echo "❌ URL tidak valid: $URL"
-            exit 1
-          fi
-          echo "✅ URL valid: $URL"
-          echo "WEB_URL=$URL" >> $GITHUB_ENV
-
-      - name: Setup Nama Aplikasi
-        run: |
-          APP_NAME="${{ github.event.inputs.app_name }}"
-          if [ -z "$APP_NAME" ]; then
-            APP_NAME="WebApp"
-          fi
-          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
-          PKG=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
-          [ -z "$PKG" ] && PKG="webapp"
-          PKG="com.web2apk.$PKG"
-          echo "PKG=$PKG" >> $GITHUB_ENV
-
-      - name: Download & Validasi Icon
-        run: |
-          ICON_URL="${{ github.event.inputs.icon_url }}"
-          if [ -n "$ICON_URL" ]; then
-            echo "📥 Download icon dari: $ICON_URL"
-            curl -L -o icon_raw.png "$ICON_URL" -H "User-Agent: Mozilla/5.0" --fail --silent
-          fi
+          cache: 'gradle'
           
-          if [ ! -f icon_raw.png ] || [ ! -s icon_raw.png ]; then
-            echo "⚠️ Icon tidak valid, membuat default..."
-            convert -size 512x512 xc:#1976D2 -fill white -gravity center -font Helvetica -pointsize 100 \
-              -annotate +0+10 "WEB" icon_work.png
-          else
-            convert icon_raw.png -resize 512x512 -background transparent -gravity center \
-              -extent 512x512 icon_work.png
-          fi
+      # ==================== SETUP FLUTTER ====================
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.3'
+          channel: 'stable'
+          cache: true
           
-          echo "✅ Icon siap"
-          file icon_work.png
-
-      - name: Resize Icon
+      - name: Check Flutter Version
+        run: flutter --version
+        
+      # ==================== CREATE FLUTTER PROJECT ====================
+      - name: Create Flutter WebView Project
         run: |
-          for size in 48 72 96 144 192 512; do
-            mkdir -p android/app/src/main/res/mipmap-${size}dpi
-            convert icon_work.png -resize ${size}x${size} -background transparent -gravity center \
-              -extent ${size}x${size} android/app/src/main/res/mipmap-${size}dpi/ic_launcher.png
-            cp android/app/src/main/res/mipmap-${size}dpi/ic_launcher.png \
-               android/app/src/main/res/mipmap-${size}dpi/ic_launcher_round.png
-          done
-          mkdir -p android/app/src/main/res/drawable
-          cp android/app/src/main/res/mipmap-192dpi/ic_launcher.png android/app/src/main/res/drawable/ic_launcher.png
-
-      - name: Create Flutter Project
-        run: |
-          flutter create --org com.web2apk --project-name webview_app --platforms android .
+          echo "📁 Creating Flutter project: ${{ github.event.inputs.app_name }}"
           
-          # Hapus demo default
-          rm -rf lib/*
+          # Create clean project
+          flutter create \
+            --org com.web2apk \
+            --project-name "${{ github.event.inputs.app_name }}" \
+            --platforms android \
+            "${{ github.event.inputs.app_name }}"
           
-          # Buat main.dart dengan WebView
+          cd "${{ github.event.inputs.app_name }}"
+          
+          # ==================== CLEAN PUBSPEC ====================
+          cat > pubspec.yaml << 'EOF'
+          name: ${{ github.event.inputs.app_name }}
+          description: Web to APK app
+          version: 1.0.0+1
+          
+          environment:
+            sdk: ">=3.0.0 <4.0.0"
+          
+          dependencies:
+            flutter:
+              sdk: flutter
+            webview_flutter: ^4.4.0
+            webview_flutter_android: ^3.12.0
+            url_launcher: ^6.3.0
+            connectivity_plus: ^6.0.0
+            shared_preferences: ^2.2.0
+            device_info_plus: ^10.0.0
+            package_info_plus: ^8.0.0
+            permission_handler: ^11.0.0
+            flutter_localizations:
+              sdk: flutter
+            http: ^1.2.0
+            cached_network_image: ^3.3.0
+            flutter_native_splash: ^2.4.0
+            flutter_launcher_icons: ^0.13.0
+            
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^3.0.0
+            
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/icon/icon.png"
+            min_sdk_android: 21
+            adaptive_icon_background: "#ffffff"
+            adaptive_icon_foreground: "assets/icon/icon.png"
+            
+          flutter_native_splash:
+            color: "#ffffff"
+            image: assets/splash/splash.png
+            android: true
+            ios: false
+            
+          flutter:
+            uses-material-design: true
+            assets:
+              - assets/icon/
+              - assets/splash/
+          EOF
+          
+          # ==================== CREATE MAIN.DART ====================
+          mkdir -p lib
           cat > lib/main.dart << 'EOF'
+          import 'dart:io';
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
+          import 'package:webview_flutter_android/webview_flutter_android.dart';
+          import 'package:url_launcher/url_launcher.dart';
+          import 'package:connectivity_plus/connectivity_plus.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+          import 'package:permission_handler/permission_handler.dart';
+          import 'package:device_info_plus/device_info_plus.dart';
+          import 'package:package_info_plus/package_info_plus.dart';
+          import 'package:cached_network_image/cached_network_image.dart';
           
-          void main() => runApp(const MyApp());
+          void main() {
+            runApp(const MyApp());
+          }
           
           class MyApp extends StatelessWidget {
             const MyApp({super.key});
-          
+            
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: 'APP_NAME_PLACEHOLDER',
+                title: '${{ github.event.inputs.app_name }}',
                 theme: ThemeData(
                   colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
                   useMaterial3: true,
@@ -147,102 +158,329 @@ jobs:
           
           class WebViewScreen extends StatefulWidget {
             const WebViewScreen({super.key});
-          
+            
             @override
             State<WebViewScreen> createState() => _WebViewScreenState();
           }
           
           class _WebViewScreenState extends State<WebViewScreen> {
-            late final WebViewController controller;
-            bool isLoading = true;
-          
+            late final WebViewController _controller;
+            bool _isLoading = true;
+            bool _hasError = false;
+            String _errorMessage = '';
+            String _currentUrl = '${{ github.event.inputs.web_url }}';
+            
             @override
             void initState() {
               super.initState();
-              final url = Uri.parse('WEB_URL_PLACEHOLDER');
-              controller = WebViewController()
+              _initializeWebView();
+              _checkConnectivity();
+              _requestPermissions();
+            }
+            
+            Future<void> _requestPermissions() async {
+              if (Platform.isAndroid) {
+                final androidInfo = await DeviceInfoPlugin().androidInfo;
+                if (androidInfo.version.sdkInt >= 33) {
+                  await [
+                    Permission.notifications,
+                  ].request();
+                }
+                await [
+                  Permission.storage,
+                  Permission.camera,
+                  Permission.microphone,
+                ].request();
+              }
+            }
+            
+            Future<void> _checkConnectivity() async {
+              final connectivityResult = await Connectivity().checkConnectivity();
+              if (connectivityResult == ConnectivityResult.none) {
+                setState(() {
+                  _hasError = true;
+                  _errorMessage = 'Tidak ada koneksi internet';
+                });
+              }
+            }
+            
+            void _initializeWebView() {
+              final platform = WebViewPlatform.instance;
+              if (platform is AndroidWebViewPlatform) {
+                platform.platformParams = const AndroidWebViewPlatformParams(
+                  useHybridComposition: true,
+                );
+              }
+              
+              _controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setBackgroundColor(const Color(0x00000000))
                 ..setNavigationDelegate(
                   NavigationDelegate(
-                    onPageFinished: (_) => setState(() => isLoading = false),
+                    onProgress: (int progress) {
+                      if (progress >= 100) {
+                        setState(() {
+                          _isLoading = false;
+                        });
+                      }
+                    },
+                    onPageStarted: (String url) {
+                      setState(() {
+                        _isLoading = true;
+                        _hasError = false;
+                        _currentUrl = url;
+                      });
+                    },
+                    onPageFinished: (String url) {
+                      setState(() {
+                        _isLoading = false;
+                        _currentUrl = url;
+                      });
+                    },
+                    onWebResourceError: (WebResourceError error) {
+                      setState(() {
+                        _hasError = true;
+                        _errorMessage = error.description ?? 'Error loading page';
+                        _isLoading = false;
+                      });
+                    },
+                    onNavigationRequest: (NavigationRequest request) {
+                      if (request.url.startsWith('http')) {
+                        return NavigationDecision.navigate;
+                      }
+                      return NavigationDecision.prevent;
+                    },
                   ),
                 )
-                ..loadRequest(url);
+                ..loadRequest(Uri.parse('${{ github.event.inputs.web_url }}'));
             }
-          
+            
+            void _reloadPage() {
+              setState(() {
+                _hasError = false;
+                _errorMessage = '';
+                _isLoading = true;
+              });
+              _controller.loadRequest(Uri.parse(_currentUrl));
+            }
+            
+            void _openInBrowser() async {
+              final url = Uri.parse(_currentUrl);
+              if (await canLaunchUrl(url)) {
+                await launchUrl(url);
+              }
+            }
+            
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                appBar: AppBar(
-                  title: Text('APP_NAME_PLACEHOLDER'),
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  foregroundColor: Colors.white,
+                body: SafeArea(
+                  child: Stack(
+                    children: [
+                      // WebView
+                      WebViewWidget(controller: _controller),
+                      
+                      // Loading Indicator
+                      if (_isLoading)
+                        Container(
+                          color: Colors.white,
+                          child: const Center(
+                            child: CircularProgressIndicator(),
+                          ),
+                        ),
+                      
+                      // Error Widget
+                      if (_hasError)
+                        Container(
+                          color: Colors.white,
+                          child: Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.error_outline,
+                                  size: 64,
+                                  color: Colors.red[300],
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Error',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey[800],
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                                  child: Text(
+                                    _errorMessage,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+                                ElevatedButton.icon(
+                                  onPressed: _reloadPage,
+                                  icon: const Icon(Icons.refresh),
+                                  label: const Text('Refresh'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-                body: Stack(
-                  children: [
-                    WebViewWidget(controller: controller),
-                    if (isLoading)
-                      const Center(child: CircularProgressIndicator()),
-                  ],
+                bottomNavigationBar: Container(
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withOpacity(0.2),
+                        blurRadius: 8,
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      IconButton(
+                        onPressed: () async {
+                          if (await _controller.canGoBack()) {
+                            _controller.goBack();
+                          }
+                        },
+                        icon: const Icon(Icons.arrow_back_ios),
+                      ),
+                      IconButton(
+                        onPressed: _reloadPage,
+                        icon: const Icon(Icons.refresh),
+                      ),
+                      IconButton(
+                        onPressed: () async {
+                          if (await _controller.canGoForward()) {
+                            _controller.goForward();
+                          }
+                        },
+                        icon: const Icon(Icons.arrow_forward_ios),
+                      ),
+                      IconButton(
+                        onPressed: _openInBrowser,
+                        icon: const Icon(Icons.open_in_browser),
+                      ),
+                    ],
+                  ),
                 ),
               );
             }
           }
           EOF
           
-          sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" lib/main.dart
-          sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" lib/main.dart
-
-      - name: Add WebView Dependencies
-        run: |
-          cat >> pubspec.yaml << 'EOF'
-          
-          dependencies:
-            webview_flutter: ^4.7.0
+          # ==================== CREATE ANDROID MANIFEST ====================
+          mkdir -p android/app/src/main
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.web2apk.${{ github.event.inputs.app_name }}">
+              
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              
+              <application
+                  android:label="${{ github.event.inputs.app_name }}"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true"
+                  android:allowBackup="true"
+                  android:theme="@style/LaunchTheme">
+                  
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+                      
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
           EOF
-
-      - name: Konfigurasi Android Manifest
-        run: |
-          PKG="${{ env.PKG }}"
-          APP_NAME="${{ env.APP_NAME }}"
           
-          # Update manifest
-          sed -i "s|package=\".*\"|package=\"$PKG\"|" android/app/src/main/AndroidManifest.xml
-          sed -i "s|android:label=\".*\"|android:label=\"$APP_NAME\"|" android/app/src/main/AndroidManifest.xml
+          # ==================== DOWNLOAD AND SETUP ICON ====================
+          echo "🖼️ Downloading icon..."
           
-          # Tambahkan internet permission
-          sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
-          sed -i '/<application/a \        android:usesCleartextTraffic="true"' android/app/src/main/AndroidManifest.xml
-
-      - name: Update build.gradle
-        run: |
-          PKG="${{ env.PKG }}"
-          sed -i "s|applicationId .*|applicationId \"$PKG\"|" android/app/build.gradle
-          sed -i "s|minSdk .*|minSdk 21|" android/app/build.gradle
-          sed -i "s|targetSdk .*|targetSdk 34|" android/app/build.gradle
-          sed -i "s|compileSdk .*|compileSdk 34|" android/app/build.gradle
-
-      - name: Build APK
-        id: build
-        run: |
+          mkdir -p assets/icon
+          mkdir -p assets/splash
+          
+          curl -L -o assets/icon/icon.png "${{ github.event.inputs.icon_url }}"
+          
+          # Create splash screen image
+          cp assets/icon/icon.png assets/splash/splash.png
+          
+          # ==================== GENERATE SPLASH ====================
+          flutter pub get
+          flutter pub run flutter_native_splash:create --flavor android
+          
+          # ==================== GENERATE ICONS ====================
+          flutter pub run flutter_launcher_icons:main -f pubspec.yaml
+          
+          # ==================== BUILD APK ====================
+          echo "🔨 Building APK..."
           flutter clean
           flutter pub get
-          flutter build apk --release --no-tree-shake-icons
+          flutter build apk --release --split-per-abi --no-tree-shake-icons
           
-          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
-          if [ -f "$APK_PATH" ]; then
-            APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
-            echo "APK_SIZE=$APK_SIZE" >> $GITHUB_OUTPUT
-            echo "✅ Build sukses! APK size: $APK_SIZE"
+          echo "✅ Build completed!"
+          
+      # ==================== VERIFY APK ====================
+      - name: Verify APK Structure
+        run: |
+          cd "${{ github.event.inputs.app_name }}"
+          APK_DIR="build/app/outputs/flutter-apk/"
+          echo "🔍 Verifying APK files..."
+          if [ -d "$APK_DIR" ]; then
+            ls -la $APK_DIR
           else
-            echo "❌ Build gagal!"
-            ls -la build/app/outputs/flutter-apk/ || true
+            echo "❌ APK directory not found!"
             exit 1
           fi
-
-      - name: Upload APK
+          
+      # ==================== ZIP APK FILES ====================
+      - name: Zip APK Files
+        run: |
+          cd "${{ github.event.inputs.app_name }}"
+          mkdir -p apk_output
+          cp build/app/outputs/flutter-apk/*.apk apk_output/
+          cd apk_output
+          zip -r ../web2apk_bundle.zip *.apk
+          cd ..
+          echo "✅ APK Bundle created:"
+          ls -la web2apk_bundle.zip
+          
+      # ==================== UPLOAD ARTIFACT ====================
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-          retention-days: 30
+          name: web2apk-bundle
+          path: ${{ github.event.inputs.app_name }}/web2apk_bundle.zip
+          retention-days: 7
