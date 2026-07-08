@@ -1,4 +1,4 @@
-name: 🌐 Web to APK
+name: 🌐 Web to APK (Native WebView)
 
 on:
   workflow_dispatch:
@@ -18,7 +18,6 @@ on:
 
 env:
   JAVA_VERSION: '17'
-  ANDROID_SDK_ROOT: /usr/local/android-sdk
   GRADLE_OPTS: '-Xmx4g -XX:MaxMetaspaceSize=512m'
 
 jobs:
@@ -41,10 +40,24 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: ${{ env.JAVA_VERSION }}
+        id: java_setup
 
-      # ─── 3. SETUP ANDROID SDK ──────────────────────────────────────
+      # ─── 3. VALIDASI JAVA_HOME ────────────────────────────────────
+      - name: 🔍 Validasi Java
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "JAVA_HOME_11_X64=$JAVA_HOME_11_X64"
+          java -version
+          which java
+
+      # ─── 4. SETUP ANDROID SDK ──────────────────────────────────────
       - name: 🤖 Setup Android SDK
         run: |
+          export JAVA_HOME=$JAVA_HOME_11_X64
+          echo "JAVA_HOME=$JAVA_HOME"
+          export PATH=$JAVA_HOME/bin:$PATH
+          java -version
+          
           sudo mkdir -p $ANDROID_SDK_ROOT
           sudo chown -R $USER:$USER $ANDROID_SDK_ROOT
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
@@ -55,10 +68,12 @@ jobs:
           export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
         env:
-          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+          ANDROID_SDK_ROOT: /usr/local/android-sdk
 
-      # ─── 4. VALIDASI URL ──────────────────────────────────────────
+      # ─── 5. VALIDASI URL ──────────────────────────────────────────
       - name: 🔍 Validasi URL
         run: |
           URL="${{ github.event.inputs.web_url }}"
@@ -69,8 +84,8 @@ jobs:
           echo "✅ URL valid: $URL"
           curl -I -s "$URL" | head -5 || true
 
-      # ─── 5. DOWNLOAD ICON ─────────────────────────────────────────
-      - name: 🖼️ Download icon
+      # ─── 6. DOWNLOAD ICON ─────────────────────────────────────────
+      - name: 🖼️ Download & resize icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
           echo "📥 Download icon dari: $ICON_URL"
@@ -82,30 +97,40 @@ jobs:
           # Install imagemagick untuk resize
           sudo apt-get update -qq
           sudo apt-get install -yqq imagemagick
-          # Buat berbagai ukuran untuk icon
+          
+          # Buat folder resources
           mkdir -p app/src/main/res
+          
+          # Buat berbagai ukuran icon
           for size in 48 72 96 144 192 512; do
             mkdir -p app/src/main/res/mipmap-${size}dpi
             convert icon_raw.png -resize ${size}x${size} app/src/main/res/mipmap-${size}dpi/ic_launcher.png
             cp app/src/main/res/mipmap-${size}dpi/ic_launcher.png app/src/main/res/mipmap-${size}dpi/ic_launcher_round.png
           done
+          
+          # Buat juga folder drawable untuk backup
+          mkdir -p app/src/main/res/drawable
+          cp app/src/main/res/mipmap-192dpi/ic_launcher.png app/src/main/res/drawable/ic_launcher.png
+          
           ls -la app/src/main/res/
 
-      # ─── 6. BUAT PROJECT ANDROID NATIVE ──────────────────────────
+      # ─── 7. BUAT PROJECT ANDROID NATIVE ──────────────────────────
       - name: 📦 Generate Android WebView Project
         run: |
           WEB_URL="${{ github.event.inputs.web_url }}"
-          VERSION="1.0.0"
           APP_NAME="${{ github.event.inputs.app_name }}"
+          
+          # Buat package name dari app_name
           PKG=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
           [ -z "$PKG" ] && PKG="webapp"
+          PKG="com.web2apk.$PKG"
           
-          flutter create --org com.web2apk --project-name "$PKG" webapp
           echo "PKG=$PKG" >> $GITHUB_ENV
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
           
-          # Buat struktur project
-          mkdir -p app/src/main/java/$(echo $PKG | tr '.' '/')
+          # Buat struktur folder
+          PKG_PATH=$(echo $PKG | tr '.' '/')
+          mkdir -p app/src/main/java/$PKG_PATH
           mkdir -p app/src/main/res/layout
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/res/drawable
@@ -125,12 +150,13 @@ jobs:
                   android:icon="@mipmap/ic_launcher"
                   android:label="APP_NAME_PLACEHOLDER"
                   android:theme="@style/Theme.AppCompat.Light.NoActionBar"
-                  android:usesCleartextTraffic="true">
+                  android:usesCleartextTraffic="true"
+                  android:hardwareAccelerated="true">
                   
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
-                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      android:configChanges="orientation|screenSize|keyboardHidden|keyboard">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -140,12 +166,11 @@ jobs:
           </manifest>
           EOF
           
-          # Ganti placeholder
           sed -i "s/PKG_PLACEHOLDER/$PKG/g" app/src/main/AndroidManifest.xml
           sed -i "s/APP_NAME_PLACEHOLDER/$APP_NAME/g" app/src/main/AndroidManifest.xml
           
           # ─── MainActivity.java ────────────────────────────────────
-          cat > app/src/main/java/$(echo $PKG | tr '.' '/')/MainActivity.java << 'EOF'
+          cat > app/src/main/java/$PKG_PATH/MainActivity.java << 'EOF'
           package PKG_PLACEHOLDER;
           
           import android.os.Bundle;
@@ -177,6 +202,7 @@ jobs:
                   webSettings.setDisplayZoomControls(false);
                   webSettings.setSupportZoom(true);
                   webSettings.setDefaultTextEncodingName("utf-8");
+                  webSettings.setCacheMode(WebSettings.LOAD_DEFAULT);
           
                   webView.setWebViewClient(new WebViewClient() {
                       @Override
@@ -201,9 +227,8 @@ jobs:
           }
           EOF
           
-          # Ganti placeholder
-          sed -i "s/PKG_PLACEHOLDER/$PKG/g" app/src/main/java/$(echo $PKG | tr '.' '/')/MainActivity.java
-          sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" app/src/main/java/$(echo $PKG | tr '.' '/')/MainActivity.java
+          sed -i "s/PKG_PLACEHOLDER/$PKG/g" app/src/main/java/$PKG_PATH/MainActivity.java
+          sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" app/src/main/java/$PKG_PATH/MainActivity.java
           
           # ─── activity_main.xml ────────────────────────────────────
           cat > app/src/main/res/layout/activity_main.xml << 'EOF'
@@ -229,6 +254,7 @@ jobs:
                   <item name="windowActionBar">false</item>
                   <item name="windowNoTitle">true</item>
                   <item name="android:windowFullscreen">true</item>
+                  <item name="android:windowBackground">@android:color/white</item>
               </style>
           </resources>
           EOF
@@ -246,12 +272,13 @@ jobs:
                   minSdk 21
                   targetSdk 34
                   versionCode 1
-                  versionName 'VERSION_PLACEHOLDER'
+                  versionName '1.0.0'
               }
           
               buildTypes {
                   release {
                       minifyEnabled true
+                      shrinkResources true
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
                   debug {
@@ -273,12 +300,15 @@ jobs:
           EOF
           
           sed -i "s/PKG_PLACEHOLDER/$PKG/g" app/build.gradle
-          sed -i "s/VERSION_PLACEHOLDER/$VERSION/g" app/build.gradle
           
           # ─── proguard-rules.pro ────────────────────────────────────
           cat > app/proguard-rules.pro << 'EOF'
           -keep class android.webkit.** { *; }
           -keep class androidx.appcompat.** { *; }
+          -keepattributes *Annotation*
+          -keepattributes SourceFile,LineNumberTable
+          -dontwarn android.webkit.**
+          -dontwarn androidx.**
           EOF
           
           # ─── build.gradle (root) ──────────────────────────────────
@@ -300,7 +330,7 @@ jobs:
               }
           }
           
-          task clean(type: Delete) {
+          tasks.register('clean', Delete) {
               delete rootProject.buildDir
           }
           EOF
@@ -329,24 +359,33 @@ jobs:
           org.gradle.jvmargs=-Xmx4g
           android.enableJetifier=true
           android.useAndroidX=true
+          android.nonTransitiveRClass=true
           EOF
           
           echo "✅ Project Android WebView berhasil dibuat"
+          echo "📦 Package: $PKG"
+          echo "📱 App Name: $APP_NAME"
 
-      # ─── 7. SETUP GRADLE WRAPPER ──────────────────────────────────
+      # ─── 8. SETUP GRADLE WRAPPER ──────────────────────────────────
       - name: 🔧 Setup Gradle Wrapper
         run: |
+          export JAVA_HOME=$JAVA_HOME_11_X64
+          export PATH=$JAVA_HOME/bin:$PATH
+          java -version
           gradle wrapper --gradle-version 8.2
           chmod +x gradlew
 
-      # ─── 8. BUILD APK ─────────────────────────────────────────────
+      # ─── 9. BUILD APK ─────────────────────────────────────────────
       - name: 🔨 Build APK
         run: |
+          export JAVA_HOME=$JAVA_HOME_11_X64
+          export PATH=$JAVA_HOME/bin:$PATH
+          java -version
           echo "📦 Building APK..."
           ./gradlew assembleRelease --no-daemon --stacktrace
           echo "✅ Build selesai"
 
-      # ─── 9. FIND APK ──────────────────────────────────────────────
+      # ─── 10. FIND APK ─────────────────────────────────────────────
       - name: 🔍 Find APK
         run: |
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
@@ -358,8 +397,9 @@ jobs:
           echo "✅ APK ditemukan: $APK_PATH"
           echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
           ls -lh $APK_PATH
+          file $APK_PATH
 
-      # ─── 10. UPLOAD ARTIFACT ──────────────────────────────────────
+      # ─── 11. UPLOAD ARTIFACT ──────────────────────────────────────
       - name: 📤 Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -368,7 +408,7 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      # ─── 11. UPLOAD KE RELEASE ────────────────────────────────────
+      # ─── 12. UPLOAD KE RELEASE ────────────────────────────────────
       - name: 📤 Upload to release
         uses: softprops/action-gh-release@v2
         with:
@@ -380,19 +420,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ─── 12. SUMMARY ──────────────────────────────────────────────
+      # ─── 13. SUMMARY ──────────────────────────────────────────────
       - name: 📊 Build Summary
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "✅ WEBVIEW APK BUILD SUCCESS!"
           echo "🌍 URL: ${{ github.event.inputs.web_url }}"
           echo "📱 App: ${{ github.event.inputs.app_name }}"
+          echo "📦 Package: ${{ env.PKG }}"
           echo "📁 APK: ${{ env.APK_PATH }}"
           APK_SIZE=$(du -h ${{ env.APK_PATH }} | cut -f1)
           echo "📏 Size: $APK_SIZE"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-      # ─── 13. NOTIFICATION ─────────────────────────────────────────
+      # ─── 14. NOTIFICATION ─────────────────────────────────────────
       - name: 🔔 Completion notification
         if: always()
         run: |
