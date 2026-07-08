@@ -39,12 +39,11 @@ jobs:
           distribution: 'temurin'
           java-version: '11'
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip wget curl imagemagick
 
-      # ─── INSTALL ANDROID SDK (FIXED) ─────────────────
       - name: Install Android SDK
         run: |
           cd /tmp
@@ -52,19 +51,10 @@ jobs:
           unzip -q commandlinetools-linux-11076708_latest.zip
           mkdir -p $ANDROID_HOME/cmdline-tools
           mv cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-          
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          
-          # Accept licenses dengan echo (bukan yes)
-          echo "✅ Accepting Android SDK licenses..."
           echo y | sdkmanager --licenses --no_https > /dev/null 2>&1 || true
-          
-          # Install build tools
-          echo "📦 Installing build-tools..."
           echo y | sdkmanager "build-tools;34.0.0" --no_https > /dev/null 2>&1 || true
           echo y | sdkmanager "platforms;android-34" --no_https > /dev/null 2>&1 || true
-          
-          echo "✅ Android SDK installed!"
 
       - name: Create Flutter project
         run: |
@@ -187,67 +177,202 @@ jobs:
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
           fi
 
+      # ─── ICON (FIXED - PAKAI ICON CUSTOM ATAU DEFAULT YANG BAGUS) ───
       - name: Setup icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
           mkdir -p webapp/android/app/src/main/res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}
+          
+          # Jika ada URL icon, download
           if [ -n "$ICON_URL" ]; then
+            echo "🖼️ Downloading custom icon..."
             curl -L -o icon.png -H "User-Agent: Mozilla/5.0" --max-time 30 "$ICON_URL" || true
           fi
-          if [ ! -f icon.png ] || ! file icon.png | grep -qi "image"; then
-            convert -size 512x512 xc:blue -fill white -gravity center -font DejaVu-Sans -pointsize 120 -draw "text 0,0 'WEB'" icon.png
+          
+          # Jika icon tidak valid atau tidak ada, buat default yang bagus
+          if [ ! -f icon.png ] || [ ! -s icon.png ] || ! file icon.png | grep -qi "image"; then
+            echo "📦 Creating default icon (gradient blue with app name)..."
+            
+            # Buat icon dengan gradient dan text (lebih bagus dari 'WEB')
+            APP_NAME="${{ env.APP_NAME }}"
+            convert -size 512x512 gradient:blue-darkblue \
+              -fill white -gravity center \
+              -font DejaVu-Sans -pointsize 80 \
+              -draw "text 0,-20 '$(echo $APP_NAME | cut -c1-2 | tr '[:lower:]' '[:upper:]')'" \
+              -gravity south -pointsize 30 \
+              -draw "text 0,40 '$APP_NAME'" \
+              icon.png
           fi
-          convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
-          convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
-          convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
-          convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-          convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          
+          # 🔥 FIX: Pastikan icon valid dan resize
+          if file icon.png | grep -qi "image"; then
+            convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+            convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+            convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+            convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+            convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+            echo "✅ Icon created successfully!"
+          else
+            echo "❌ Icon creation failed!"
+            exit 1
+          fi
 
+      # ─── MAIN.DART (FIXED - DENGAN ERROR HANDLING) ───
       - name: Generate main.dart
         run: |
           APP_NAME="${{ env.APP_NAME }}"
           WEB_URL="${{ github.event.inputs.web_url }}"
+          
           cat > webapp/lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
+          
           void main() => runApp(MyApp());
+          
           class MyApp extends StatelessWidget {
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
                 title: 'APP_NAME_PLACEHOLDER',
-                theme: ThemeData(primarySwatch: Colors.blue),
+                theme: ThemeData(
+                  primarySwatch: Colors.blue,
+                  useMaterial3: true,
+                ),
                 home: WebViewScreen(),
                 debugShowCheckedModeBanner: false,
               );
             }
           }
+          
           class WebViewScreen extends StatefulWidget {
             @override
             _WebViewScreenState createState() => _WebViewScreenState();
           }
+          
           class _WebViewScreenState extends State<WebViewScreen> {
-            late WebViewController controller;
+            late final WebViewController controller;
+            bool _isLoading = true;
+            bool _hasError = false;
+            String _errorMessage = '';
+          
             @override
             void initState() {
               super.initState();
+              
+              // 🔥 FIX: Pastikan URL valid
+              String url = 'WEB_URL_PLACEHOLDER';
+              if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                url = 'https://$url';
+              }
+              
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onProgress: (int progress) {
+                      // Optional
+                    },
+                    onPageStarted: (String url) {
+                      setState(() {
+                        _isLoading = true;
+                        _hasError = false;
+                      });
+                    },
+                    onPageFinished: (String url) {
+                      setState(() {
+                        _isLoading = false;
+                      });
+                    },
+                    onWebResourceError: (WebResourceError error) {
+                      setState(() {
+                        _isLoading = false;
+                        _hasError = true;
+                        _errorMessage = error.description;
+                      });
+                    },
+                  ),
+                )
+                ..loadRequest(Uri.parse(url));
             }
+          
             @override
             Widget build(BuildContext context) {
               return Scaffold(
                 appBar: AppBar(
                   title: Text('APP_NAME_PLACEHOLDER'),
+                  centerTitle: true,
                   backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,
+                  elevation: 0,
                 ),
-                body: WebViewWidget(controller: controller),
+                body: Stack(
+                  children: [
+                    WebViewWidget(controller: controller),
+                    if (_isLoading)
+                      Container(
+                        color: Colors.white,
+                        child: const Center(
+                          child: CircularProgressIndicator(
+                            color: Colors.blue,
+                          ),
+                        ),
+                      ),
+                    if (_hasError)
+                      Container(
+                        color: Colors.white,
+                        child: Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20.0),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.error_outline,
+                                  size: 80,
+                                  color: Colors.red,
+                                ),
+                                const SizedBox(height: 20),
+                                Text(
+                                  'Gagal Memuat Halaman',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  _errorMessage.isNotEmpty 
+                                      ? _errorMessage 
+                                      : 'Periksa koneksi internet atau URL website',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                const SizedBox(height: 30),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      _hasError = false;
+                                      _isLoading = true;
+                                      controller.reload();
+                                    });
+                                  },
+                                  child: const Text('Coba Lagi'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               );
             }
           }
           EOF
+          
           sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" webapp/lib/main.dart
           sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" webapp/lib/main.dart
 
