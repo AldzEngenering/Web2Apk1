@@ -1,205 +1,193 @@
-# .github/workflows/web2apk.yml
-name: 🌐 Web to APK Builder
+name: Web to APK Builder
 
 on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: '🌐 URL Website'
+        description: 'URL Website'
         required: true
         type: string
       app_name:
-        description: '📱 Nama Aplikasi'
+        description: 'Nama Aplikasi'
         required: true
         type: string
       icon_url:
-        description: '🖼️ URL Icon (PNG/JPG)'
+        description: 'URL Icon (Logo)'
         required: true
         type: string
 
-env:
-  FLUTTER_VERSION: '3.22.4'
-
 jobs:
   build:
-    name: 🌐 Web to APK
+    name: Build Web to APK
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
-      # ═══════════════════════════════════════════════════════════════════
-      # 1. CHECKOUT
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 📥 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ═══════════════════════════════════════════════════════════════════
-      # 2. INSTALL DEPENDENCIES (MINIMAL)
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 📦 Install Dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq curl unzip zip wget file
-
-      # ═══════════════════════════════════════════════════════════════════
-      # 3. SETUP FLUTTER
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 🎯 Setup Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
+          flutter-version: '3.24.0'
+          channel: 'stable'
 
-      - name: ✅ Verify Flutter
-        run: |
-          flutter --version
-          flutter doctor -v || true
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-      # ═══════════════════════════════════════════════════════════════════
-      # 4. CREATE PROJECT (HANYA WEB)
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 🎯 Create Web Project
-        run: |
-          echo "🎯 Creating web project..."
-          
-          # Buat project web saja (tanpa android)
-          flutter create --platforms=web webapp
-          
-          if [ ! -d "webapp" ]; then
-            echo "❌ Failed to create project!"
-            exit 1
-          fi
-          
-          echo "✅ Project created"
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-      # ═══════════════════════════════════════════════════════════════════
-      # 5. GENERATE WEB CONTENT
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 📝 Generate Web Content
+      - name: Install dependencies
         run: |
-          echo "📝 Generating web content..."
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            libgtk-3-dev \
+            liblzma-dev \
+            git \
+            unzip
+
+      # 1. Create Flutter WebView project
+      - name: Create WebView Flutter project
+        id: create_project
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g')
           
+          # Buat project Flutter
+          flutter create --org com.web2apk --project-name "$PACKAGE_NAME" webapp
+          
+          cd webapp
+          
+          # Tambahkan dependency webview_flutter
+          echo "" >> pubspec.yaml
+          echo "dependencies:" >> pubspec.yaml
+          echo "  webview_flutter: ^4.7.0" >> pubspec.yaml
+          
+          flutter pub get
+
+      # 2. Download icon
+      - name: Download icon
+        run: |
+          ICON_URL="${{ github.event.inputs.icon_url }}"
+          mkdir -p webapp/android/app/src/main/res/mipmap-hdpi
+          mkdir -p webapp/android/app/src/main/res/mipmap-mdpi
+          mkdir -p webapp/android/app/src/main/res/mipmap-xhdpi
+          mkdir -p webapp/android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p webapp/android/app/src/main/res/mipmap-xxxhdpi
+          
+          curl -L -o icon.png "$ICON_URL"
+          
+          # Resize icon untuk berbagai resolusi
+          convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+      # 3. Generate WebView code
+      - name: Generate WebView code
+        run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           WEB_URL="${{ github.event.inputs.web_url }}"
           
-          # Buat index.html sederhana dengan iframe
-          mkdir -p webapp/web
-          cat > webapp/web/index.html << EOF
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>$APP_NAME</title>
-            <style>
-              * { margin: 0; padding: 0; }
-              body { overflow: hidden; height: 100vh; }
-              iframe { width: 100%; height: 100%; border: none; }
-            </style>
-          </head>
-          <body>
-            <iframe src="$WEB_URL"></iframe>
-          </body>
-          </html>
+          cat > webapp/lib/main.dart << 'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+          
+          void main() {
+            runApp(MyApp());
+          }
+          
+          class MyApp extends StatelessWidget {
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'APP_NAME_PLACEHOLDER',
+                theme: ThemeData(
+                  primarySwatch: Colors.blue,
+                ),
+                home: WebViewScreen(),
+                debugShowCheckedModeBanner: false,
+              );
+            }
+          }
+          
+          class WebViewScreen extends StatefulWidget {
+            @override
+            _WebViewScreenState createState() => _WebViewScreenState();
+          }
+          
+          class _WebViewScreenState extends State<WebViewScreen> {
+            late final WebViewController controller;
+          
+            @override
+            void initState() {
+              super.initState();
+              controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
+            }
+          
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: Text('APP_NAME_PLACEHOLDER'),
+                  centerTitle: true,
+                ),
+                body: WebViewWidget(controller: controller),
+              );
+            }
+          }
           EOF
           
-          echo "✅ Web content generated"
+          # Ganti placeholder
+          sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" webapp/lib/main.dart
+          sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" webapp/lib/main.dart
 
-      # ═══════════════════════════════════════════════════════════════════
-      # 6. DOWNLOAD ICON
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 🖼️ Download Icon
+      # 4. Update Android Manifest
+      - name: Update Android Manifest
         run: |
-          echo "🖼️ Downloading icon..."
-          
-          mkdir -p webapp/web/assets
-          
-          if curl -L -o webapp/web/assets/icon.png "${{ github.event.inputs.icon_url }}"; then
-            echo "✅ Icon downloaded"
-          else
-            echo "⚠️ Download failed, creating fallback..."
-            echo "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAOxAAADsQBlSsOGwAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAACAASURBVHic7N15nFxVne/xz7mnqrp6n50kQBISEAgBEkgAAQERcZ1RJkIQQR5KcWIM6rM
-          " | base64 -d > webapp/web/assets/icon.png
-          fi
-
-      # ═══════════════════════════════════════════════════════════════════
-      # 7. INSTALL PWA2APK
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 📦 Install PWA2APK
-        run: |
-          echo "📦 Installing PWA2APK..."
-          
-          # Download PWA2APK
-          wget -O pwa2apk.jar https://github.com/your-repo/pwa2apk/releases/latest/download/pwa2apk.jar || \
-          wget -O pwa2apk.jar https://github.com/tfandkusu/pwa2apk/releases/download/v2.0.0/pwa2apk.jar
-          
-          if [ ! -f pwa2apk.jar ]; then
-            echo "❌ Failed to download PWA2APK!"
-            exit 1
-          fi
-          
-          echo "✅ PWA2APK installed"
-
-      # ═══════════════════════════════════════════════════════════════════
-      # 8. BUILD APK WITH PWA2APK
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 🔨 Build APK
-        run: |
-          echo "🔨 Building APK with PWA2APK..."
-          
           APP_NAME="${{ github.event.inputs.app_name }}"
-          PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
           
-          # Build dengan PWA2APK
-          java -jar pwa2apk.jar \
-            --input webapp/web \
-            --output app.apk \
-            --name "$APP_NAME" \
-            --package "com.$PACKAGE_NAME" \
-            --icon webapp/web/assets/icon.png
+          sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' \
+            webapp/android/app/src/main/AndroidManifest.xml
+
+      # 5. Build APK
+      - name: Build APK
+        id: build_apk
+        run: |
+          cd webapp
+          flutter build apk --release
           
-          if [ ! -f app.apk ]; then
-            echo "❌ PWA2APK build failed!"
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "✅ APK built!"
+            echo "APK_SIZE=$(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Build failed!"
             exit 1
           fi
-          
-          echo "✅ APK built successfully!"
 
-      # ═══════════════════════════════════════════════════════════════════
-      # 9. COLLECT APK
-      # ═══════════════════════════════════════════════════════════════════
-      - name: 📦 Collect APK
-        run: |
-          echo "📦 Collecting APK..."
-          mkdir -p apk_output
-          cp app.apk apk_output/
-          echo "📦 APK:"
-          ls -la apk_output/
-
-      # ═══════════════════════════════════════════════════════════════════
-      # 10. UPLOAD APK
-      # ═══════════════════════════════════════════════════════════════════
-      - name: ⬆️ Upload APK Artifact
+      # 6. Upload APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: webapp-apk
-          path: apk_output/
+          path: webapp/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error
 
-      # ═══════════════════════════════════════════════════════════════════
-      # 11. NOTIFY
-      # ═══════════════════════════════════════════════════════════════════
-      - name: ✅ Build Success
-        if: success()
+      - name: Build Summary
         run: |
-          echo "🎉 WEB TO APK SUCCESS!"
-          echo "📱 App: ${{ github.event.inputs.app_name }}"
-          echo "🌐 URL: ${{ github.event.inputs.web_url }}"
-
-      - name: ❌ Build Failed
-        if: failure()
-        run: |
-          echo "❌ WEB TO APK FAILED!"
-          echo "📋 Check logs above"
+          echo "## ✅ Web to APK Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| App Name | ${{ github.event.inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Web URL | ${{ github.event.inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| APK Size | ${{ steps.build_apk.outputs.APK_SIZE }} |" >> $GITHUB_STEP_SUMMARY

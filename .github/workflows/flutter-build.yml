@@ -1,0 +1,149 @@
+name: Flutter APK Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_url:
+        description: 'URL Release GitHub'
+        required: true
+        type: string
+      tag:
+        description: 'Tag Build'
+        required: true
+        type: string
+      build_type:
+        description: 'Tipe Build'
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+        default: 'release'
+
+jobs:
+  build:
+    name: Build Flutter APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # 1. Setup environment
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            libgtk-3-dev \
+            liblzma-dev \
+            git \
+            unzip
+
+      # 2. Download project from GitHub Release
+      - name: Download project ZIP from release
+        id: download_zip
+        run: |
+          RELEASE_URL="${{ github.event.inputs.release_url }}"
+          echo "📥 Downloading from: $RELEASE_URL"
+          
+          # Download file dari release
+          curl -L -o project.zip \
+            -H "Accept: application/octet-stream" \
+            "$RELEASE_URL"
+          
+          ls -la project.zip
+          echo "ZIP_SIZE=$(du -h project.zip | cut -f1)" >> $GITHUB_OUTPUT
+
+      - name: Extract project
+        run: |
+          mkdir -p project
+          unzip -q project.zip -d project/
+          ls -la project/
+
+      # 3. Check if pubspec.yaml exists
+      - name: Validate Flutter project
+        run: |
+          if [ ! -f "project/pubspec.yaml" ]; then
+            echo "❌ pubspec.yaml not found!"
+            exit 1
+          fi
+          echo "✅ Flutter project validated"
+
+      # 4. Build APK
+      - name: Get dependencies
+        run: |
+          cd project
+          flutter pub get
+
+      - name: Build APK
+        id: build_apk
+        run: |
+          cd project
+          
+          if [ "${{ github.event.inputs.build_type }}" == "debug" ]; then
+            echo "🔨 Building DEBUG APK..."
+            flutter build apk --debug
+          else
+            echo "🔨 Building RELEASE APK..."
+            flutter build apk --release --split-per-abi
+          fi
+          
+          # Cek hasil build
+          if [ "${{ github.event.inputs.build_type }}" == "debug" ]; then
+            APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
+          else
+            APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          fi
+          
+          if [ -f "$APK_PATH" ]; then
+            echo "✅ APK built successfully!"
+            echo "APK_PATH=$APK_PATH" >> $GITHUB_OUTPUT
+            echo "APK_SIZE=$(du -h $APK_PATH | cut -f1)" >> $GITHUB_OUTPUT
+          else
+            echo "❌ APK not found!"
+            exit 1
+          fi
+
+      # 5. Upload artifact
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-apk
+          path: project/build/app/outputs/flutter-apk/*.apk
+          retention-days: 7
+          if-no-files-found: error
+
+      # 6. Send result back to bot (optional)
+      - name: Build Summary
+        run: |
+          echo "## ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tipe Build | ${{ github.event.inputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | ${{ github.event.inputs.tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| APK Size | ${{ steps.build_apk.outputs.APK_SIZE }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ZIP Size | ${{ steps.download_zip.outputs.ZIP_SIZE }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Show APK location
+        run: |
+          echo "📱 APK Location:"
+          find project -name "*.apk" -type f -exec ls -la {} \;
