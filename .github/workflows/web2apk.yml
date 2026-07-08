@@ -122,7 +122,6 @@ jobs:
             url_launcher: ^6.3.0
             connectivity_plus: ^6.0.0
             permission_handler: ^11.0.0
-            device_info_plus: ^10.0.0
             flutter_native_splash: ^2.4.0
             flutter_launcher_icons: ^0.13.0
             
@@ -161,7 +160,6 @@ jobs:
           import 'package:url_launcher/url_launcher.dart';
           import 'package:connectivity_plus/connectivity_plus.dart';
           import 'package:permission_handler/permission_handler.dart';
-          import 'package:device_info_plus/device_info_plus.dart';
           
           void main() {
             runApp(const MyApp());
@@ -204,20 +202,6 @@ jobs:
               _initializeWebView();
               _checkConnectivity();
               _requestPermissions();
-            }
-            
-            Future<void> _requestPermissions() async {
-              if (Platform.isAndroid) {
-                final androidInfo = await DeviceInfoPlugin().androidInfo;
-                if (androidInfo.version.sdkInt >= 33) {
-                  await Permission.notification.request();
-                }
-                await [
-                  Permission.storage,
-                  Permission.camera,
-                  Permission.microphone,
-                ].request();
-              }
             }
             
             Future<void> _checkConnectivity() async {
@@ -404,12 +388,6 @@ jobs:
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.CAMERA" />
-              <uses-permission android:name="android.permission.RECORD_AUDIO" />
-              <uses-permission android:name="android.permission.VIBRATE" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               
               <application
                   android:label="${{ github.event.inputs.app_name }}"
@@ -449,68 +427,25 @@ jobs:
           echo "🖼️ Generating app icons..."
           flutter pub run flutter_launcher_icons:main -f pubspec.yaml || echo "⚠️ Icon generation skipped"
           
-          # ==================== BUILD APK ====================
-          echo "🔨 Building APK..."
+          
+      - name: Build APK
+        id: build
+        run: |
+          cd webapp
           flutter clean
           flutter pub get
-          flutter build apk --release --split-per-abi --no-tree-shake-icons
-          
-          echo "✅ Build completed!"
-          
-          # ==================== LIST ALL FILES ====================
-          echo "📁 Listing all APK files..."
-          find . -name "*.apk" -type f
-          
-      # ==================== FIND AND UPLOAD APK ====================
-      - name: Find and Upload APK
-        run: |
-          PROJECT_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
-          cd "$PROJECT_NAME"
-          
-          echo "📁 Searching for APK files..."
-          
-          # Find all APK files
-          APK_FILES=$(find . -name "*.apk" -type f)
-          
-          if [ -n "$APK_FILES" ]; then
-            echo "✅ Found APK files:"
-            echo "$APK_FILES"
-            
-            # Create output directory
-            mkdir -p apk_output
-            
-            # Copy all found APK files
-            echo "$APK_FILES" | while read -r file; do
-              if [ -f "$file" ]; then
-                cp "$file" apk_output/
-                echo "📁 Copied: $file"
-              fi
-            done
-            
-            # List copied files
-            echo "📁 Files in apk_output:"
-            ls -la apk_output/
-            
-            # Create zip
-            cd apk_output
-            zip -r ../web2apk_bundle.zip *.apk
-            cd ..
-            
-            echo "✅ Bundle created:"
-            ls -la web2apk_bundle.zip
-            
+          flutter build apk --release
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "APK_SIZE=$(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)" >> $GITHUB_OUTPUT
+            echo "✅ Build success!"
           else
-            echo "❌ ERROR: No APK files found!"
-            echo "📁 Directory structure:"
-            ls -la
-            find . -type d | head -20
+            echo "❌ Build failed!"
             exit 1
           fi
-          
-      # ==================== UPLOAD ARTIFACT ====================
-      - name: Upload Artifact
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-bundle
-          path: ${{ github.event.inputs.app_name }}/web2apk_bundle.zip
+          name: webapp-apk
+          path: webapp/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
