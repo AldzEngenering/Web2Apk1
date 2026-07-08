@@ -40,14 +40,7 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      # ─── 3. VERIFIKASI JAVA ───────────────────────────────────────
-      - name: 🔍 Verifikasi Java
-        run: |
-          echo "JAVA_HOME=$JAVA_HOME"
-          java -version
-          javac -version
-
-      # ─── 4. SETUP ANDROID SDK ──────────────────────────────────────
+      # ─── 3. SETUP ANDROID SDK ──────────────────────────────────────
       - name: 🤖 Setup Android SDK
         run: |
           export JAVA_HOME=$JAVA_HOME
@@ -74,7 +67,7 @@ jobs:
           
           echo "✅ Android SDK selesai diinstall"
 
-      # ─── 5. VALIDASI URL ──────────────────────────────────────────
+      # ─── 4. VALIDASI URL ──────────────────────────────────────────
       - name: 🔍 Validasi URL
         run: |
           URL="${{ github.event.inputs.web_url }}"
@@ -83,109 +76,70 @@ jobs:
             exit 1
           fi
           echo "✅ URL valid: $URL"
-          curl -I -s "$URL" | head -5 || true
 
-      # ─── 6. DOWNLOAD & VALIDASI ICON ─────────────────────────────
+      # ─── 5. DOWNLOAD & VALIDASI ICON ─────────────────────────────
       - name: 🖼️ Download & validasi icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
           echo "📥 Download icon dari: $ICON_URL"
           
-          # Download dengan user agent
           curl -L -o icon_raw.png "$ICON_URL" -H "User-Agent: Mozilla/5.0"
           
-          # Cek apakah file berhasil didownload
           if [ ! -f icon_raw.png ]; then
             echo "❌ Gagal download icon, membuat icon default..."
-            echo "create default icon" > /tmp/fallback
-            exit 0
-          fi
-          
-          # Cek ukuran file
-          FILE_SIZE=$(stat -c%s icon_raw.png)
-          echo "📏 Ukuran file: $FILE_SIZE bytes"
-          
-          if [ "$FILE_SIZE" -lt 100 ]; then
-            echo "⚠️ File terlalu kecil (< 100 bytes), mungkin bukan gambar!"
-            echo "Membuat icon default..."
-            exit 0
-          fi
-          
-          # Install tools
-          sudo apt-get update -qq
-          sudo apt-get install -yqq imagemagick file
-          
-          # Cek tipe file
-          file icon_raw.png
-          
-          # Coba konversi dengan berbagai format
-          echo "🔄 Mencoba konversi icon..."
-          
-          # Coba sebagai PNG
-          if convert icon_raw.png -resize 512x512 icon_test.png 2>/dev/null; then
-            echo "✅ Icon berhasil dikonversi sebagai PNG"
-            cp icon_raw.png icon_work.png
-          # Coba sebagai JPG
-          elif convert icon_raw.jpg -resize 512x512 icon_test.png 2>/dev/null; then
-            echo "✅ Icon berhasil dikonversi sebagai JPG"
-            cp icon_raw.jpg icon_work.png
-          # Coba sebagai WEBP
-          elif convert icon_raw.webp -resize 512x512 icon_test.png 2>/dev/null; then
-            echo "✅ Icon berhasil dikonversi sebagai WEBP"
-            cp icon_raw.webp icon_work.png
-          else
-            echo "⚠️ Gagal konversi icon, membuat icon default..."
-            # Buat icon default kotak hijau
-            convert -size 512x512 xc:#4CAF50 -fill white -gravity center -font Helvetica -pointsize 80 \
-              -annotate 0 "APP" icon_work.png 2>/dev/null || echo "Gagal buat icon default"
-          fi
-          
-          # Jika icon_work tidak ada atau corrupt, buat default
-          if [ ! -f icon_work.png ] || [ ! -s icon_work.png ]; then
-            echo "⚠️ Icon corrupt, membuat icon default..."
             convert -size 512x512 xc:#2196F3 -fill white -gravity center -font Helvetica -pointsize 80 \
-              -annotate 0 "WEB" icon_work.png 2>/dev/null || true
+              -annotate 0 "WEB" icon_work.png
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -yqq imagemagick file
+            file icon_raw.png
+            
+            # Coba konversi
+            if convert icon_raw.png -resize 512x512 icon_test.png 2>/dev/null; then
+              cp icon_raw.png icon_work.png
+            elif convert icon_raw.jpg -resize 512x512 icon_test.png 2>/dev/null; then
+              cp icon_raw.jpg icon_work.png
+            else
+              echo "⚠️ Gagal konversi icon, membuat default..."
+              convert -size 512x512 xc:#4CAF50 -fill white -gravity center -font Helvetica -pointsize 80 \
+                -annotate 0 "APP" icon_work.png
+            fi
           fi
           
-          # Verifikasi final icon
-          if [ -f icon_work.png ] && [ -s icon_work.png ]; then
-            echo "✅ Icon siap digunakan"
-            file icon_work.png
-            ls -lh icon_work.png
-          else
-            echo "❌ Gagal membuat icon, exit"
-            exit 1
+          # Pastikan icon_work ada
+          if [ ! -f icon_work.png ] || [ ! -s icon_work.png ]; then
+            echo "⚠️ Icon corrupt, membuat default..."
+            convert -size 512x512 xc:#2196F3 -fill white -gravity center -font Helvetica -pointsize 80 \
+              -annotate 0 "WEB" icon_work.png
           fi
+          
+          echo "✅ Icon siap digunakan"
+          file icon_work.png
 
-      # ─── 7. RESIZE ICON ───────────────────────────────────────────
-      - name: 🖼️ Resize icon untuk semua resolusi
+      # ─── 6. RESIZE ICON ───────────────────────────────────────────
+      - name: 🖼️ Resize icon
         run: |
-          # Buat folder resources
           mkdir -p app/src/main/res
           
-          # Resize ke berbagai ukuran
           for size in 48 72 96 144 192 512; do
             mkdir -p app/src/main/res/mipmap-${size}dpi
             convert icon_work.png -resize ${size}x${size} -background transparent -gravity center \
               -extent ${size}x${size} app/src/main/res/mipmap-${size}dpi/ic_launcher.png
             cp app/src/main/res/mipmap-${size}dpi/ic_launcher.png \
                app/src/main/res/mipmap-${size}dpi/ic_launcher_round.png
-            echo "✅ ${size}dpi selesai"
           done
           
           mkdir -p app/src/main/res/drawable
           cp app/src/main/res/mipmap-192dpi/ic_launcher.png app/src/main/res/drawable/ic_launcher.png
           
-          echo "✅ Semua icon selesai diresize"
-          ls -la app/src/main/res/
+          echo "✅ Icon selesai diresize"
 
-      # ─── 8. BUAT PROJECT ANDROID NATIVE ──────────────────────────
+      # ─── 7. BUAT PROJECT ANDROID NATIVE ──────────────────────────
       - name: 📦 Generate Android WebView Project
         run: |
           WEB_URL="${{ github.event.inputs.web_url }}"
           APP_NAME="${{ github.event.inputs.app_name }}"
           
-          # Buat package name
           PKG=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
           [ -z "$PKG" ] && PKG="webapp"
           PKG="com.web2apk.$PKG"
@@ -193,7 +147,6 @@ jobs:
           echo "PKG=$PKG" >> $GITHUB_ENV
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
           
-          # Buat struktur folder
           PKG_PATH=$(echo $PKG | tr '.' '/')
           mkdir -p app/src/main/java/$PKG_PATH
           mkdir -p app/src/main/res/layout
@@ -243,7 +196,6 @@ jobs:
           import android.webkit.WebViewClient;
           import android.webkit.WebChromeClient;
           import android.webkit.WebSettings;
-          import android.view.View;
           import android.view.WindowManager;
           import androidx.appcompat.app.AppCompatActivity;
           
@@ -342,13 +294,8 @@ jobs:
           
               buildTypes {
                   release {
-                      minifyEnabled true
-                      shrinkResources true
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-                  debug {
                       minifyEnabled false
-                      debuggable true
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
               }
           
@@ -384,7 +331,7 @@ jobs:
                   mavenCentral()
               }
               dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.0'
+                  classpath 'com.android.tools.build:gradle:8.0.2'
               }
           }
           
@@ -393,10 +340,6 @@ jobs:
                   google()
                   mavenCentral()
               }
-          }
-          
-          tasks.register('clean', Delete) {
-              delete rootProject.buildDir
           }
           EOF
           
@@ -428,17 +371,35 @@ jobs:
           EOF
           
           echo "✅ Project Android WebView berhasil dibuat"
-          echo "📦 Package: $PKG"
-          echo "📱 App Name: $APP_NAME"
 
-      # ─── 9. SETUP GRADLE WRAPPER ──────────────────────────────────
+      # ─── 8. SETUP GRADLE WRAPPER ──────────────────────────────────
       - name: 🔧 Setup Gradle Wrapper
         run: |
           export JAVA_HOME=$JAVA_HOME
           export PATH=$JAVA_HOME/bin:$PATH
           java -version
-          gradle wrapper --gradle-version 8.2
+          gradle wrapper --gradle-version 8.0.2
           chmod +x gradlew
+
+      # ─── 9. DEBUG GRADLE ──────────────────────────────────────────
+      - name: 🔍 Debug Gradle
+        run: |
+          export JAVA_HOME=$JAVA_HOME
+          export PATH=$JAVA_HOME/bin:$PATH
+          export ANDROID_SDK_ROOT=/usr/local/android-sdk
+          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+          echo "🔍 Mengecek environment..."
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "PATH=$PATH"
+          echo ""
+          echo "🔍 Mengecek file project..."
+          ls -la
+          ls -la app/
+          ls -la app/src/
+          echo ""
+          echo "🔍 Mengecek gradle..."
+          ./gradlew --version
 
       # ─── 10. BUILD APK ─────────────────────────────────────────────
       - name: 🔨 Build APK
@@ -447,18 +408,20 @@ jobs:
           export PATH=$JAVA_HOME/bin:$PATH
           export ANDROID_SDK_ROOT=/usr/local/android-sdk
           export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
-          java -version
           echo "📦 Building APK..."
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew assembleRelease --no-daemon --stacktrace --info
           echo "✅ Build selesai"
 
       # ─── 11. FIND APK ─────────────────────────────────────────────
       - name: 🔍 Find APK
         run: |
-          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "🔍 Mencari APK..."
+          find . -name "*.apk" -type f
+          APK_PATH=$(find app/build/outputs/apk -name "*.apk" -type f | head -1)
           if [ -z "$APK_PATH" ]; then
             echo "❌ APK tidak ditemukan!"
-            find app/build -name "*.apk" 2>/dev/null || echo "Tidak ada APK"
+            echo "📂 Struktur folder:"
+            find app/build -type f 2>/dev/null | head -20 || echo "Tidak ada folder build"
             exit 1
           fi
           echo "✅ APK ditemukan: $APK_PATH"
@@ -498,9 +461,3 @@ jobs:
           APK_SIZE=$(du -h ${{ env.APK_PATH }} | cut -f1)
           echo "📏 Size: $APK_SIZE"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      # ─── 15. NOTIFICATION ─────────────────────────────────────────
-      - name: 🔔 Completion notification
-        if: always()
-        run: |
-          echo "✅ Build selesai dengan status: ${{ job.status }}"
