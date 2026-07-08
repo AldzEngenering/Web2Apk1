@@ -28,12 +28,12 @@ jobs:
         uses: actions/checkout@v4
 
       # ──────────────────────────────────────────────
-      # 1. SETUP FLUTTER
+      # 1. SETUP FLUTTER (VERSION STABLE)
       # ──────────────────────────────────────────────
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: '3.22.0'
           channel: 'stable'
           cache: true
 
@@ -47,7 +47,7 @@ jobs:
           java-version: '17'
 
       # ──────────────────────────────────────────────
-      # 3. INSTALL ANDROID SDK (MANUAL)
+      # 3. INSTALL ANDROID SDK
       # ──────────────────────────────────────────────
       - name: Install Android SDK
         run: |
@@ -107,7 +107,100 @@ jobs:
           echo "✅ Project created!"
 
       # ──────────────────────────────────────────────
-      # 6. ADD WEBVIEW FLUTTER
+      # 6. CONFIGURE GRADLE & KOTLIN
+      # ──────────────────────────────────────────────
+      - name: Configure Gradle & Kotlin
+        run: |
+          cd webapp
+          
+          # ─── ANDROID/build.gradle ───
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.0'
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:7.3.0'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
+          
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          
+          rootProject.buildDir = '../build'
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+          
+          tasks.register('clean', Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+          
+          # ─── APP/build.gradle ───
+          cat > android/app/build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application'
+              id 'kotlin-android'
+          }
+          
+          android {
+              namespace 'com.web2apk.PACKAGE_NAME_PLACEHOLDER'
+              compileSdk 34
+              
+              defaultConfig {
+                  applicationId 'com.web2apk.PACKAGE_NAME_PLACEHOLDER'
+                  minSdkVersion 21
+                  targetSdkVersion 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              
+              buildTypes {
+                  release {
+                      minifyEnabled true
+                      proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                  }
+              }
+              
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          
+          dependencies {
+              implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+              implementation 'androidx.core:core-ktx:1.10.1'
+          }
+          EOF
+          
+          # Ganti PACKAGE_NAME
+          PACKAGE_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
+          if [ -z "$PACKAGE_NAME" ]; then
+            PACKAGE_NAME="webapp"
+          fi
+          
+          sed -i "s/PACKAGE_NAME_PLACEHOLDER/$PACKAGE_NAME/g" android/app/build.gradle
+          
+          echo "✅ Gradle & Kotlin configured!"
+
+      # ──────────────────────────────────────────────
+      # 7. ADD WEBVIEW FLUTTER
       # ──────────────────────────────────────────────
       - name: Add webview_flutter dependency
         run: |
@@ -127,25 +220,18 @@ jobs:
           echo "✅ Dependencies installed!"
 
       # ──────────────────────────────────────────────
-      # 7. FIX ANDROID MANIFEST (SEBELUM DIEDIT)
+      # 8. FIX ANDROID MANIFEST
       # ──────────────────────────────────────────────
       - name: Fix AndroidManifest.xml
         run: |
           cd webapp
           
-          # Backup manifest asli
-          cp android/app/src/main/AndroidManifest.xml android/app/src/main/AndroidManifest.xml.bak
+          APP_NAME="${{ github.event.inputs.app_name }}"
           
-          # Baca isi manifest
-          echo "📄 Original AndroidManifest.xml:"
-          cat android/app/src/main/AndroidManifest.xml
-          
-          # 🔥 FIX: Hapus duplikat label dengan sed yang lebih baik
-          # Hapus semua android:label yang ada di <application>
+          # Hapus semua label yang ada
           sed -i 's/android:label="[^"]*"//g' android/app/src/main/AndroidManifest.xml
           
-          # Tambahkan label baru di <application>
-          APP_NAME="${{ github.event.inputs.app_name }}"
+          # Tambahkan label baru
           sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' \
             android/app/src/main/AndroidManifest.xml
           
@@ -153,46 +239,18 @@ jobs:
           sed -i 's|<application|<application android:usesCleartextTraffic="true"|g' \
             android/app/src/main/AndroidManifest.xml
           
-          # Tambahkan INTERNET permission jika belum ada
+          # Tambahkan INTERNET permission
           if ! grep -q "android.permission.INTERNET" android/app/src/main/AndroidManifest.xml; then
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' \
               android/app/src/main/AndroidManifest.xml
           fi
           
-          echo "📄 Fixed AndroidManifest.xml:"
-          cat android/app/src/main/AndroidManifest.xml
+          echo "✅ AndroidManifest fixed!"
 
       # ──────────────────────────────────────────────
-      # 8. FIX KOTLIN VERSION
+      # 9. DOWNLOAD & RESIZE ICON
       # ──────────────────────────────────────────────
-      - name: Fix Kotlin version
-        run: |
-          cd webapp
-          
-          # Update Kotlin version di build.gradle
-          cat >> android/build.gradle << 'EOF'
-          
-          buildscript {
-              ext.kotlin_version = '1.9.22'
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:7.4.2'
-                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-              }
-          }
-          EOF
-          
-          # Update gradle wrapper
-          echo "✅ Kotlin version fixed!"
-
-      # ──────────────────────────────────────────────
-      # 9. DOWNLOAD ICON
-      # ──────────────────────────────────────────────
-      - name: Download icon
-        id: download_icon
+      - name: Setup icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
           
@@ -202,68 +260,33 @@ jobs:
           mkdir -p webapp/android/app/src/main/res/mipmap-xxhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxxhdpi
           
-          if [ -z "$ICON_URL" ]; then
-            echo "⚠️ No icon URL, using default..."
-            echo "default" > /tmp/use_default_icon
-            exit 0
+          # Coba download icon
+          if [ -n "$ICON_URL" ]; then
+            echo "🖼️ Downloading icon..."
+            curl -L -o icon.png -H "User-Agent: Mozilla/5.0" --max-time 30 "$ICON_URL" || true
           fi
           
-          echo "🖼️ Downloading icon..."
-          curl -L -o icon.png \
-            -H "User-Agent: Mozilla/5.0" \
-            --max-time 30 \
-            "$ICON_URL" || echo "⚠️ Download failed"
-          
-          if [ ! -s icon.png ] || ! file icon.png | grep -qi "image"; then
-            echo "⚠️ Invalid icon, using default..."
-            echo "default" > /tmp/use_default_icon
-            rm -f icon.png
-          else
-            echo "✅ Icon downloaded!"
-          fi
-
-      # ──────────────────────────────────────────────
-      # 10. RESIZE ICON
-      # ──────────────────────────────────────────────
-      - name: Resize icon
-        run: |
-          echo "🖼️ Processing icon..."
-          
-          if [ -f /tmp/use_default_icon ] || [ ! -f icon.png ]; then
+          # Jika icon tidak valid, buat default
+          if [ ! -f icon.png ] || [ ! -s icon.png ] || ! file icon.png | grep -qi "image"; then
             echo "📦 Creating default icon..."
-            
             convert -size 512x512 xc:blue \
               -fill white -gravity center \
               -font DejaVu-Sans -pointsize 120 \
               -draw "text 0,0 'WEB'" \
-              icon_default.png
-            
-            for size in 48 72 96 144 192; do
-              case $size in
-                48) folder="mipmap-mdpi" ;;
-                72) folder="mipmap-hdpi" ;;
-                96) folder="mipmap-xhdpi" ;;
-                144) folder="mipmap-xxhdpi" ;;
-                192) folder="mipmap-xxxhdpi" ;;
-              esac
-              convert icon_default.png -resize ${size}x${size} \
-                webapp/android/app/src/main/res/$folder/ic_launcher.png
-            done
-            
-            echo "✅ Default icon created!"
-            exit 0
+              icon.png
           fi
           
+          # Resize ke semua resolusi
           convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
           convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
           convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
           convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           
-          echo "✅ Icon resized!"
+          echo "✅ Icon ready!"
 
       # ──────────────────────────────────────────────
-      # 11. GENERATE WEBVIEW CODE
+      # 10. GENERATE WEBVIEW CODE
       # ──────────────────────────────────────────────
       - name: Generate WebView code
         run: |
@@ -362,7 +385,7 @@ jobs:
           echo "✅ WebView code generated!"
 
       # ──────────────────────────────────────────────
-      # 12. BUILD APK
+      # 11. BUILD APK
       # ──────────────────────────────────────────────
       - name: Build APK
         id: build_apk
@@ -371,10 +394,10 @@ jobs:
           
           echo "🔨 Building APK..."
           
-          # Clean terlebih dahulu
+          # Clean
           flutter clean
           
-          # Build dengan verbose
+          # Build
           flutter build apk --release
           
           APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
@@ -391,7 +414,7 @@ jobs:
           fi
 
       # ──────────────────────────────────────────────
-      # 13. UPLOAD APK
+      # 12. UPLOAD APK
       # ──────────────────────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -402,7 +425,7 @@ jobs:
           if-no-files-found: error
 
       # ──────────────────────────────────────────────
-      # 14. BUILD SUMMARY
+      # 13. BUILD SUMMARY
       # ──────────────────────────────────────────────
       - name: Build Summary
         run: |
@@ -412,4 +435,4 @@ jobs:
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| App Name | ${{ github.event.inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Web URL | ${{ github.event.inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| APK Size | ${{ steps.build_apk.outputs.APK_SIZE }} |" >> $GITHUB_STEP_SUMMARY Nn
+          echo "| APK Size | ${{ steps.build_apk.outputs.APK_SIZE }} |" >> $GITHUB_STEP_SUMMARY
