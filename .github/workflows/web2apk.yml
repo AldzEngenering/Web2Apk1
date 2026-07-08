@@ -70,7 +70,8 @@ jobs:
             unzip \
             curl \
             wget \
-            imagemagick
+            imagemagick \
+            file
 
       # ─── CREATE FLUTTER PROJECT ────────────────────────
       - name: Create Flutter project
@@ -81,62 +82,102 @@ jobs:
           
           echo "📱 Creating project: $PACKAGE_NAME"
           
-          # Buat project Flutter
           flutter create --org com.web2apk --project-name "$PACKAGE_NAME" webapp
           
           echo "✅ Project created!"
 
-      # ─── ADD WEBVIEW FLUTTER (TANPA DUPLICATE) ─────────
+      # ─── ADD WEBVIEW FLUTTER ───────────────────────────
       - name: Add webview_flutter dependency
         run: |
           cd webapp
           
-          # 🔥 CARA AMAN: Tambahkan dependency dengan sed (tanpa duplicate)
-          # Cek apakah dependencies sudah ada
           if grep -q "^dependencies:" pubspec.yaml; then
-            # Jika sudah ada, tambahkan di bawah dependencies:
             sed -i '/^dependencies:/a\  webview_flutter: ^4.7.0' pubspec.yaml
           else
-            # Jika belum ada, tambahkan dependencies section
             echo "" >> pubspec.yaml
             echo "dependencies:" >> pubspec.yaml
             echo "  webview_flutter: ^4.7.0" >> pubspec.yaml
           fi
           
-          # Tampilkan pubspec.yaml untuk debugging
-          echo "📄 pubspec.yaml:"
-          cat pubspec.yaml
-          
           flutter pub get
           echo "✅ Dependencies installed!"
 
-      # ─── DOWNLOAD & RESIZE ICON ──────────────────────────
-      - name: Download and resize icon
+      # ─── DOWNLOAD ICON (DENGAN VALIDASI) ──────────────
+      - name: Download and validate icon
+        id: download_icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
-          echo "🖼️ Downloading icon..."
+          echo "🖼️ Downloading icon from: $ICON_URL"
           
+          # Buat folder icon
           mkdir -p webapp/android/app/src/main/res/mipmap-hdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-mdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxxhdpi
           
-          curl -L -o icon.png "$ICON_URL"
+          # Download dengan header User-Agent
+          curl -L -o icon.png \
+            -H "User-Agent: Mozilla/5.0" \
+            "$ICON_URL"
           
-          if [ ! -f "icon.png" ]; then
-            echo "❌ Failed to download icon!"
+          # 🔥 VALIDASI: Cek apakah file benar-benar gambar
+          echo "📋 Checking file type..."
+          file icon.png
+          
+          # Cek jika file kosong
+          if [ ! -s icon.png ]; then
+            echo "❌ File icon kosong!"
             exit 1
           fi
           
-          # Resize icon
-          convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
-          convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
-          convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
-          convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-          convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          # Cek apakah file adalah gambar
+          if ! file icon.png | grep -q "image"; then
+            echo "⚠️ File bukan gambar! Isi file:"
+            head -c 200 icon.png
+            echo ""
+            echo "❌ URL tidak mengembalikan gambar yang valid!"
+            exit 1
+          fi
           
-          echo "✅ Icon resized!"
+          echo "✅ Icon downloaded and validated!"
+
+      # ─── RESIZE ICON ────────────────────────────────────
+      - name: Resize icon
+        run: |
+          echo "🖼️ Resizing icon..."
+          
+          # 🔥 AMAN: Gunakan convert dengan validasi
+          if ! convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png; then
+            echo "❌ Failed to resize to mdpi"
+            exit 1
+          fi
+          
+          if ! convert icon.png -resize 72x72 webapp/android/app/src/main/res/mipmap-hdpi/ic_launcher.png; then
+            echo "❌ Failed to resize to hdpi"
+            exit 1
+          fi
+          
+          if ! convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png; then
+            echo "❌ Failed to resize to xhdpi"
+            exit 1
+          fi
+          
+          if ! convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png; then
+            echo "❌ Failed to resize to xxhdpi"
+            exit 1
+          fi
+          
+          if ! convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png; then
+            echo "❌ Failed to resize to xxxhdpi"
+            exit 1
+          fi
+          
+          echo "✅ Icon resized successfully!"
+          
+          # Tampilkan hasil
+          echo "📋 Resized icons:"
+          ls -la webapp/android/app/src/main/res/mipmap-*/ic_launcher.png
 
       # ─── GENERATE WEBVIEW CODE ──────────────────────────
       - name: Generate WebView code
@@ -202,7 +243,6 @@ jobs:
           }
           EOF
           
-          # Ganti placeholder
           sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" webapp/lib/main.dart
           sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" webapp/lib/main.dart
           
@@ -213,17 +253,39 @@ jobs:
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           
-          # Ganti label
           sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' \
             webapp/android/app/src/main/AndroidManifest.xml
           
-          # Tambahkan INTERNET permission
           if ! grep -q "android.permission.INTERNET" webapp/android/app/src/main/AndroidManifest.xml; then
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' \
               webapp/android/app/src/main/AndroidManifest.xml
           fi
           
           echo "✅ Android Manifest updated!"
+
+      # ─── FALLBACK ICON (JIKA GAGAL) ────────────────────
+      - name: Generate fallback icon
+        if: failure() && steps.download_icon.outcome == 'failure'
+        run: |
+          echo "⚠️ Generating fallback icon..."
+          
+          # Buat icon default dengan ImageMagick
+          convert -size 192x192 xc:blue \
+            -fill white -gravity center \
+            -font Arial -pointsize 60 \
+            -draw "text 0,0 'WEB'" \
+            webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          
+          # Copy ke semua resolusi
+          for size in 48 72 96 144; do
+            convert -size ${size}x${size} xc:blue \
+              -fill white -gravity center \
+              -font Arial -pointsize $((size/3)) \
+              -draw "text 0,0 'W'" \
+              webapp/android/app/src/main/res/mipmap-${size}/ic_launcher.png 2>/dev/null || true
+          done
+          
+          echo "✅ Fallback icon generated!"
 
       # ─── BUILD APK ──────────────────────────────────────
       - name: Build APK
