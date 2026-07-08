@@ -67,13 +67,14 @@ jobs:
           
           flutter create --org com.web2apk --project-name "$PKG" webapp
           echo "PKG=$PKG" >> $GITHUB_ENV
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      # ─── FIX GRADLE (SEDERHANA) ──────────────────────
-      - name: Fix Gradle
+      # ─── FIX GRADLE (DENGAN NAMESPACE) ──────────────
+      - name: Fix Gradle with namespace
         run: |
           cd webapp
           
-          # Android build.gradle
+          # ─── ANDROID/build.gradle ───
           cat > android/build.gradle << 'EOF'
           buildscript {
               repositories {
@@ -91,9 +92,23 @@ jobs:
                   mavenCentral()
               }
           }
+          
+          rootProject.buildDir = '../build'
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+          
+          tasks.register('clean', Delete) {
+              delete rootProject.buildDir
+          }
           EOF
           
-          # App build.gradle
+          # ─── APP/build.gradle (DENGAN NAMESPACE) ────
+          PKG="${{ env.PKG }}"
+          
           cat > android/app/build.gradle << 'EOF'
           def localProperties = new Properties()
           def localPropertiesFile = rootProject.file('local.properties')
@@ -122,7 +137,8 @@ jobs:
           apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
           
           android {
-              compileSdkVersion 34
+              namespace "com.web2apk.PKG_PLACEHOLDER"
+              compileSdk 34
               ndkVersion flutter.ndkVersion
           
               compileOptions {
@@ -148,11 +164,24 @@ jobs:
           flutter {
               source '../..'
           }
+          
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.10.1'
+          }
           EOF
           
-          sed -i "s/PKG_PLACEHOLDER/${{ env.PKG }}/g" android/app/build.gradle
+          sed -i "s/PKG_PLACEHOLDER/$PKG/g" android/app/build.gradle
           
-          echo "✅ Gradle fixed!"
+          # ─── GRADLE/WRAPPER ──────────────────────────
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-7.5-all.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          
+          echo "✅ Gradle with namespace fixed!"
 
       # ─── ADD WEBVIEW ──────────────────────────────────
       - name: Add webview
@@ -165,15 +194,26 @@ jobs:
       - name: Fix Manifest
         run: |
           cd webapp
-          APP_NAME="${{ github.event.inputs.app_name }}"
+          APP_NAME="${{ env.APP_NAME }}"
           
+          # Backup
+          cp android/app/src/main/AndroidManifest.xml android/app/src/main/AndroidManifest.xml.bak
+          
+          # Hapus label lama
           sed -i 's/android:label="[^"]*"//g' android/app/src/main/AndroidManifest.xml
+          
+          # Tambahkan label baru
           sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' android/app/src/main/AndroidManifest.xml
+          
+          # Tambahkan usesCleartextTraffic
           sed -i 's|<application|<application android:usesCleartextTraffic="true"|g' android/app/src/main/AndroidManifest.xml
           
+          # Tambahkan INTERNET permission
           if ! grep -q "INTERNET" android/app/src/main/AndroidManifest.xml; then
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
           fi
+          
+          echo "✅ Manifest fixed!"
 
       # ─── ICON ──────────────────────────────────────────
       - name: Setup icon
@@ -199,7 +239,7 @@ jobs:
       # ─── MAIN.DART ─────────────────────────────────────
       - name: Generate main.dart
         run: |
-          APP_NAME="${{ github.event.inputs.app_name }}"
+          APP_NAME="${{ env.APP_NAME }}"
           WEB_URL="${{ github.event.inputs.web_url }}"
           
           cat > webapp/lib/main.dart << 'EOF'
@@ -266,6 +306,7 @@ jobs:
             echo "✅ Build success!"
           else
             echo "❌ Build failed!"
+            find . -name "*.apk" 2>/dev/null || echo "No APK found"
             exit 1
           fi
 
