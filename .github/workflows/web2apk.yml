@@ -69,6 +69,30 @@ jobs:
           echo "PKG=$PKG" >> $GITHUB_ENV
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
+      # ─── FIX GRADLE WRAPPER ──────────────────────────
+      - name: Fix Gradle Wrapper
+        run: |
+          cd webapp
+          
+          # Buat folder gradle/wrapper
+          mkdir -p gradle/wrapper
+          
+          # Buat gradle-wrapper.properties
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-7.5-all.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          
+          # Buat gradle-wrapper.jar (download dari internet)
+          cd gradle/wrapper
+          wget -q https://raw.githubusercontent.com/gradle/gradle/v7.5.0/gradle/wrapper/gradle-wrapper.jar
+          cd ../..
+          
+          echo "✅ Gradle wrapper fixed!"
+
       # ─── FIX GRADLE (DENGAN NAMESPACE) ──────────────
       - name: Fix Gradle with namespace
         run: |
@@ -171,15 +195,6 @@ jobs:
           EOF
           
           sed -i "s/PKG_PLACEHOLDER/$PKG/g" android/app/build.gradle
-          
-          # ─── GRADLE/WRAPPER ──────────────────────────
-          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-7.5-all.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
           
           echo "✅ Gradle with namespace fixed!"
 
