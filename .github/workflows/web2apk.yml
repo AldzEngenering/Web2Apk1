@@ -41,22 +41,20 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # ─── SETUP ANDROID SDK ─────────────────────────────
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 'latest'
-          build-tools-version: '34.0.0'
-          platform-version: '34'
-
       # ─── ACCEPT ANDROID SDK LICENSES ──────────────────
-      - name: Accept Android SDK Licenses
+      # ubuntu-latest runners already ship a full Android SDK at $ANDROID_HOME,
+      # so we just accept licenses and install the specific packages we need
+      # on it — no extra SDK-setup action required (that action was pulling
+      # Google's deprecated legacy "tools" package, whose zip download is
+      # unreliable and was causing the build to fail).
+      - name: Accept licenses and install SDK packages
         run: |
-          mkdir -p $ANDROID_HOME/licenses
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
-          echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
-          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> $ANDROID_HOME/licenses/android-sdk-license
-          echo "✅ Android SDK licenses accepted!"
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+          echo "✅ Android SDK licenses accepted and packages installed!"
 
       # ─── INSTALL DEPENDENCIES ──────────────────────────
       - name: Install system dependencies
