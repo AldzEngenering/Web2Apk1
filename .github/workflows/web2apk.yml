@@ -1,525 +1,152 @@
-name: 🌐 Web to APK (Native WebView)
+name: Web to APK Builder
 
 on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: '🌍 URL Website'
+        description: 'Website URL'
         required: true
         type: string
       app_name:
-        description: '📱 Nama Aplikasi'
+        description: 'App Name'
         required: true
         type: string
       icon_url:
-        description: '🖼️ URL Icon (PNG/JPG, 512x512 min)'
+        description: 'Icon URL (PNG)'
         required: true
         type: string
 
-env:
-  GRADLE_OPTS: '-Xmx4g -XX:MaxMetaspaceSize=512m'
-
 jobs:
   build:
-    name: 🚀 Build WebView APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-      actions: read
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
 
     steps:
-      # ─── 1. CHECKOUT ──────────────────────────────────────────────
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+      # 1. Setup Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
 
-      # ─── 2. SETUP JAVA 17 ─────────────────────────────────────────
-      - name: ☕ Setup Java 17
+      # 2. Setup Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      # ─── 3. SETUP ANDROID SDK ──────────────────────────────────────
-      - name: 🤖 Setup Android SDK
+      # 3. Setup Android SDK
+      - name: Setup Android SDK
         run: |
-          export JAVA_HOME=$JAVA_HOME
-          export PATH=$JAVA_HOME/bin:$PATH
-          java -version
-          
-          export ANDROID_SDK_ROOT=/usr/local/android-sdk
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          
-          sudo mkdir -p $ANDROID_SDK_ROOT
-          sudo chown -R $USER:$USER $ANDROID_SDK_ROOT
-          
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip -d $ANDROID_SDK_ROOT
-          mv $ANDROID_SDK_ROOT/cmdline-tools $ANDROID_SDK_ROOT/latest
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-          mv $ANDROID_SDK_ROOT/latest $ANDROID_SDK_ROOT/cmdline-tools/
-          
-          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
-          echo "PATH=$PATH" >> $GITHUB_ENV
-          
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          
-          echo "✅ Android SDK selesai diinstall"
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          wget -q "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip -d $HOME/android-sdk
+          mkdir -p $HOME/android-sdk/cmdline-tools/latest
+          mv $HOME/android-sdk/cmdline-tools/* $HOME/android-sdk/cmdline-tools/latest/ 2>/dev/null || true
+          echo "y" | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
 
-      # ─── 4. VALIDASI URL ──────────────────────────────────────────
-      - name: 🔍 Validasi URL
+      # 4. Buat project Flutter baru dengan webview
+      - name: Create Flutter WebView Project
         run: |
-          URL="${{ github.event.inputs.web_url }}"
-          if [[ ! "$URL" =~ ^https?:// ]]; then
-            echo "❌ URL tidak valid: $URL"
-            exit 1
-          fi
-          echo "✅ URL valid: $URL"
+          flutter create --org com.web2app --project-name webview_app --platforms android .
+          # Hapus default main.dart
+          rm -f lib/main.dart
+          # Buat main.dart dengan webview
+          cat > lib/main.dart << 'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
 
-      # ─── 5. DOWNLOAD & VALIDASI ICON ─────────────────────────────
-      - name: 🖼️ Download & validasi icon
+          void main() => runApp(WebViewApp());
+
+          class WebViewApp extends StatelessWidget {
+            const WebViewApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: '${{ github.event.inputs.app_name }}',
+                theme: ThemeData(primarySwatch: Colors.blue),
+                home: WebView(
+                  initialUrl: '${{ github.event.inputs.web_url }}',
+                  javascriptMode: JavascriptMode.unrestricted,
+                  gestureNavigationEnabled: true,
+                  zoomEnabled: true,
+                ),
+              );
+            }
+          }
+          EOF
+
+          # Tambahkan dependency webview_flutter
+          flutter pub add webview_flutter
+
+      # 5. Download icon
+      - name: Download Icon
         run: |
-          ICON_URL="${{ github.event.inputs.icon_url }}"
-          echo "📥 Download icon dari: $ICON_URL"
-          
-          curl -L -o icon_raw.png "$ICON_URL" -H "User-Agent: Mozilla/5.0"
-          
-          if [ ! -f icon_raw.png ]; then
-            echo "❌ Gagal download icon, membuat icon default..."
-            sudo apt-get update -qq
-            sudo apt-get install -yqq imagemagick
-            convert -size 512x512 xc:#2196F3 -fill white -gravity center -font Helvetica -pointsize 80 \
-              -annotate 0 "WEB" icon_work.png
+          mkdir -p android/app/src/main/res
+          wget -q "${{ github.event.inputs.icon_url }}" -O icon_temp.png
+          # Convert to proper icon sizes
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/res/mipmap-mdpi
+          mkdir -p android/app/src/main/res/mipmap-xhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          # Gunakan convert dari ImageMagick (bisa juga pakai sharp lewat npm)
+          sudo apt-get install -y imagemagick
+          convert icon_temp.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon_temp.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon_temp.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert icon_temp.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert icon_temp.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          rm -f icon_temp.png
+
+      # 6. Ganti nama aplikasi di AndroidManifest.xml
+      - name: Update App Name
+        run: |
+          sed -i 's/android:label="webview_app"/android:label="${{ github.event.inputs.app_name }}"/g' android/app/src/main/AndroidManifest.xml || true
+
+      # 7. Flutter build
+      - name: Build APK
+        run: |
+          flutter pub get
+          flutter build apk --release --split-per-abi
+
+      # 8. Verifikasi struktur APK
+      - name: Verify APK Structure
+        run: |
+          APK_FILE=$(ls build/app/outputs/flutter-apk/*.apk 2>/dev/null | head -1)
+          if [ -n "$APK_FILE" ]; then
+            echo "✅ APK ditemukan: $APK_FILE"
+            echo "Struktur internal APK:"
+            unzip -l "$APK_FILE" | grep -E "classes.dex|resources.arsc|AndroidManifest.xml|assets/flutter_assets|assets/dexopt|lib/|res/|META-INF"
           else
-            sudo apt-get update -qq
-            sudo apt-get install -yqq imagemagick file
-            file icon_raw.png
-            
-            if convert icon_raw.png -resize 512x512 icon_test.png 2>/dev/null; then
-              cp icon_raw.png icon_work.png
-            elif convert icon_raw.jpg -resize 512x512 icon_test.png 2>/dev/null; then
-              cp icon_raw.jpg icon_work.png
-            else
-              echo "⚠️ Gagal konversi icon, membuat default..."
-              convert -size 512x512 xc:#4CAF50 -fill white -gravity center -font Helvetica -pointsize 80 \
-                -annotate 0 "APP" icon_work.png
-            fi
-          fi
-          
-          if [ ! -f icon_work.png ] || [ ! -s icon_work.png ]; then
-            echo "⚠️ Icon corrupt, membuat default..."
-            convert -size 512x512 xc:#2196F3 -fill white -gravity center -font Helvetica -pointsize 80 \
-              -annotate 0 "WEB" icon_work.png
-          fi
-          
-          echo "✅ Icon siap digunakan"
-          file icon_work.png
-
-      # ─── 6. RESIZE ICON ───────────────────────────────────────────
-      - name: 🖼️ Resize icon
-        run: |
-          mkdir -p app/src/main/res
-          
-          for size in 48 72 96 144 192 512; do
-            mkdir -p app/src/main/res/mipmap-${size}dpi
-            convert icon_work.png -resize ${size}x${size} -background transparent -gravity center \
-              -extent ${size}x${size} app/src/main/res/mipmap-${size}dpi/ic_launcher.png
-            cp app/src/main/res/mipmap-${size}dpi/ic_launcher.png \
-               app/src/main/res/mipmap-${size}dpi/ic_launcher_round.png
-          done
-          
-          mkdir -p app/src/main/res/drawable
-          cp app/src/main/res/mipmap-192dpi/ic_launcher.png app/src/main/res/drawable/ic_launcher.png
-          
-          echo "✅ Icon selesai diresize"
-
-      # ─── 7. BUAT PROJECT ANDROID NATIVE ──────────────────────────
-      - name: 📦 Generate Android WebView Project
-        run: |
-          WEB_URL="${{ github.event.inputs.web_url }}"
-          APP_NAME="${{ github.event.inputs.app_name }}"
-          
-          PKG=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
-          [ -z "$PKG" ] && PKG="webapp"
-          PKG="com.web2apk.$PKG"
-          
-          echo "PKG=$PKG" >> $GITHUB_ENV
-          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
-          
-          PKG_PATH=$(echo $PKG | tr '.' '/')
-          mkdir -p app/src/main/java/$PKG_PATH
-          mkdir -p app/src/main/res/layout
-          mkdir -p app/src/main/res/values
-          mkdir -p app/src/main/res/drawable
-          
-          # ─── AndroidManifest.xml ──────────────────────────────────
-          cat > app/src/main/AndroidManifest.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="PKG_PLACEHOLDER">
-          
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-          
-              <application
-                  android:allowBackup="true"
-                  android:icon="@mipmap/ic_launcher"
-                  android:label="APP_NAME_PLACEHOLDER"
-                  android:theme="@style/Theme.AppCompat.Light.NoActionBar"
-                  android:usesCleartextTraffic="true"
-                  android:hardwareAccelerated="true">
-                  
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:configChanges="orientation|screenSize|keyboardHidden|keyboard">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-          
-          sed -i "s/PKG_PLACEHOLDER/$PKG/g" app/src/main/AndroidManifest.xml
-          sed -i "s/APP_NAME_PLACEHOLDER/$APP_NAME/g" app/src/main/AndroidManifest.xml
-          
-          # ─── MainActivity.java ────────────────────────────────────
-          cat > app/src/main/java/$PKG_PATH/MainActivity.java << 'EOF'
-          package PKG_PLACEHOLDER;
-          
-          import android.os.Bundle;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-          import android.webkit.WebChromeClient;
-          import android.webkit.WebSettings;
-          import android.view.WindowManager;
-          import androidx.appcompat.app.AppCompatActivity;
-          
-          public class MainActivity extends AppCompatActivity {
-              private WebView webView;
-          
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                          WindowManager.LayoutParams.FLAG_FULLSCREEN);
-                  setContentView(R.layout.activity_main);
-          
-                  webView = findViewById(R.id.webView);
-                  WebSettings webSettings = webView.getSettings();
-                  webSettings.setJavaScriptEnabled(true);
-                  webSettings.setDomStorageEnabled(true);
-                  webSettings.setLoadWithOverviewMode(true);
-                  webSettings.setUseWideViewPort(true);
-                  webSettings.setBuiltInZoomControls(true);
-                  webSettings.setDisplayZoomControls(false);
-                  webSettings.setSupportZoom(true);
-                  webSettings.setDefaultTextEncodingName("utf-8");
-                  webSettings.setCacheMode(WebSettings.LOAD_DEFAULT);
-          
-                  webView.setWebViewClient(new WebViewClient() {
-                      @Override
-                      public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                          view.loadUrl(url);
-                          return true;
-                      }
-                  });
-          
-                  webView.setWebChromeClient(new WebChromeClient());
-                  webView.loadUrl("WEB_URL_PLACEHOLDER");
-              }
-          
-              @Override
-              public void onBackPressed() {
-                  if (webView.canGoBack()) {
-                      webView.goBack();
-                  } else {
-                      super.onBackPressed();
-                  }
-              }
-          }
-          EOF
-          
-          sed -i "s/PKG_PLACEHOLDER/$PKG/g" app/src/main/java/$PKG_PATH/MainActivity.java
-          sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" app/src/main/java/$PKG_PATH/MainActivity.java
-          
-          # ─── activity_main.xml ────────────────────────────────────
-          cat > app/src/main/res/layout/activity_main.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:orientation="vertical">
-          
-              <WebView
-                  android:id="@+id/webView"
-                  android:layout_width="match_parent"
-                  android:layout_height="match_parent" />
-          
-          </LinearLayout>
-          EOF
-          
-          # ─── styles.xml ────────────────────────────────────────────
-          cat > app/src/main/res/values/styles.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="Theme.AppCompat.Light.NoActionBar" parent="Theme.AppCompat.Light">
-                  <item name="windowActionBar">false</item>
-                  <item name="windowNoTitle">true</item>
-                  <item name="android:windowFullscreen">true</item>
-                  <item name="android:windowBackground">@android:color/white</item>
-              </style>
-          </resources>
-          EOF
-          
-          # ─── build.gradle (app level) ─────────────────────────────
-          cat > app/build.gradle << 'EOF'
-          apply plugin: 'com.android.application'
-          
-          android {
-              namespace 'PKG_PLACEHOLDER'
-              compileSdk 34
-          
-              defaultConfig {
-                  applicationId 'PKG_PLACEHOLDER'
-                  minSdk 21
-                  targetSdk 34
-                  versionCode 1
-                  versionName '1.0.0'
-              }
-          
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-              }
-          
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          }
-          
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'androidx.core:core:1.12.0'
-          }
-          EOF
-          
-          sed -i "s/PKG_PLACEHOLDER/$PKG/g" app/build.gradle
-          
-          # ─── proguard-rules.pro ────────────────────────────────────
-          cat > app/proguard-rules.pro << 'EOF'
-          -keep class android.webkit.** { *; }
-          -keep class androidx.appcompat.** { *; }
-          -keepattributes *Annotation*
-          -keepattributes SourceFile,LineNumberTable
-          -dontwarn android.webkit.**
-          -dontwarn androidx.**
-          EOF
-          
-          # ─── build.gradle (root) ──────────────────────────────────
-          cat > build.gradle << 'EOF'
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.0.2'
-              }
-          }
-          
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          EOF
-          
-          # ─── settings.gradle ──────────────────────────────────────
-          cat > settings.gradle << 'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = 'WebViewApp'
-          include ':app'
-          EOF
-          
-          # ─── gradle.properties ─────────────────────────────────────
-          cat > gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx4g
-          android.enableJetifier=true
-          android.useAndroidX=true
-          android.nonTransitiveRClass=true
-          EOF
-          
-          echo "✅ Project Android WebView berhasil dibuat"
-
-      # ─── 8. SETUP GRADLE WRAPPER (SIMPLE) ─────────────────────────
-      - name: 🔧 Setup Gradle Wrapper
-        run: |
-          export JAVA_HOME=$JAVA_HOME
-          export PATH=$JAVA_HOME/bin:$PATH
-          java -version
-          
-          # Download gradle wrapper files
-          echo "📥 Downloading gradle wrapper..."
-          mkdir -p gradle/wrapper
-          
-          # Download gradle-wrapper.jar
-          curl -L -o gradle/wrapper/gradle-wrapper.jar \
-            https://github.com/gradle/gradle/raw/v8.0.2/gradle/wrapper/gradle-wrapper.jar
-          
-          # Create gradle-wrapper.properties
-          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.0.2-bin.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          
-          # Create gradlew script
-          cat > gradlew << 'EOFGRADLEW'
-          #!/bin/sh
-          set -e
-          
-          # Determine the Java command to use
-          if [ -z "$JAVA_HOME" ]; then
-            echo "JAVA_HOME is not set"
-            exit 1
-          fi
-          
-          # Location of the gradle wrapper jar
-          GRADLE_WRAPPER_JAR="$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar"
-          
-          # Run gradle wrapper
-          exec "$JAVA_HOME/bin/java" -jar "$GRADLE_WRAPPER_JAR" "$@"
-          EOFGRADLEW
-          
-          chmod +x gradlew
-          
-          # Create gradlew.bat (for windows, optional)
-          cat > gradlew.bat << 'EOF'
-          @rem
-          @rem Copyright 2015 the original author or authors.
-          @rem
-          @rem Licensed under the Apache License, Version 2.0 (the "License");
-          @rem you may not use this file except in compliance with the License.
-          @rem You may obtain a copy of the License at
-          @rem
-          @rem      https://www.apache.org/licenses/LICENSE-2.0
-          @rem
-          @rem Unless required by applicable law or agreed to in writing, software
-          @rem distributed under the License is distributed on an "AS IS" BASIS,
-          @rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-          @rem See the License for the specific language governing permissions and
-          @rem limitations under the License.
-          @rem
-          
-          @if "%DEBUG%" == "" @echo off
-          @rem ##########################################################################
-          @rem
-          @rem  Gradle startup script for Windows
-          @rem
-          @rem ##########################################################################
-          
-          set DIRNAME=%~dp0
-          if "%DIRNAME%" == "" set DIRNAME=.
-          set APP_BASE_NAME=%~n0
-          set APP_HOME=%DIRNAME%
-          
-          java -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %*
-          EOF
-          
-          echo "✅ Gradle wrapper selesai disetup"
-          ls -la gradle/wrapper/
-          ls -la gradlew
-
-      # ─── 9. BUILD APK ─────────────────────────────────────────────
-      - name: 🔨 Build APK
-        run: |
-          cd webapp
-          flutter clean
-          flutter build apk --release
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            echo "APK_SIZE=$(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)" >> $GITHUB_OUTPUT
-            echo "✅ Build success!"
-          else
-            echo "❌ Build failed!"
-            exit 1
-          fi
-
-      # ─── 10. FIND APK ─────────────────────────────────────────────
-      - name: 🔍 Find APK
-        run: |
-          echo "🔍 Mencari APK..."
-          find . -name "*.apk" -type f
-          APK_PATH=$(find app/build/outputs/apk -name "*.apk" -type f | head -1)
-          if [ -z "$APK_PATH" ]; then
             echo "❌ APK tidak ditemukan!"
-            echo "📂 Struktur folder build:"
-            find app/build -type f 2>/dev/null | head -30 || echo "Tidak ada folder build"
-            # Coba build debug sebagai fallback
-            echo "🔄 Mencoba build debug..."
-            ./gradlew assembleDebug --no-daemon
-            APK_PATH=$(find app/build/outputs/apk -name "*.apk" -type f | head -1)
-            if [ -z "$APK_PATH" ]; then
-              echo "❌ APK masih tidak ditemukan!"
-              exit 1
-            fi
+            exit 1
           fi
-          echo "✅ APK ditemukan: $APK_PATH"
-          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
-          ls -lh $APK_PATH
 
-      # ─── 11. UPLOAD ARTIFACT ──────────────────────────────────────
-      - name: 📤 Upload APK artifact
+      # 9. Upload APK sebagai artifact
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: webview-apk-${{ github.event.inputs.app_name }}
-          path: ${{ env.APK_PATH }}
+          name: web2apk-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
           retention-days: 7
-          compression-level: 0
 
-      # ─── 12. UPLOAD KE RELEASE ────────────────────────────────────
-      - name: 📤 Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: webview-${{ github.event.inputs.app_name }}-${{ github.run_number }}
-          files: ${{ env.APK_PATH }}
-          draft: false
-          prerelease: false
-          generate_release_notes: false
+      # 10. Upload ke release
+      - name: Upload to Release
+        if: success()
+        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ─── 13. SUMMARY ──────────────────────────────────────────────
-      - name: 📊 Build Summary
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ WEBVIEW APK BUILD SUCCESS!"
-          echo "🌍 URL: ${{ github.event.inputs.web_url }}"
-          echo "📱 App: ${{ github.event.inputs.app_name }}"
-          echo "📦 Package: ${{ env.PKG }}"
-          echo "📁 APK: ${{ env.APK_PATH }}"
-          APK_SIZE=$(du -h ${{ env.APK_PATH }} | cut -f1)
-          echo "📏 Size: $APK_SIZE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: build/app/outputs/flutter-apk/app-release.apk
+          asset_name: ${{ github.event.inputs.app_name }}-webapp.apk
+          asset_content_type: application/vnd.android.package-archive
