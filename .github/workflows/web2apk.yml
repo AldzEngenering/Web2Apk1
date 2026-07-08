@@ -26,22 +26,52 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ─── SETUP FLUTTER ──────────────────────────────────
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
+          cache: true
 
+      # ─── SETUP JAVA ─────────────────────────────────────
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
+      # ─── SETUP ANDROID SDK (STABLE - TANPA PREVIEW) ────
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 'latest'
+          build-tools-version: '34.0.0'
+          platform-version: '34'
 
-      - name: Install dependencies
+      # ─── ACCEPT ALL ANDROID SDK LICENSES ────────────────
+      - name: Accept Android SDK Licenses
+        run: |
+          echo "✅ Accepting Android SDK licenses..."
+          
+          # Buat folder licenses
+          mkdir -p $ANDROID_HOME/licenses
+          
+          # Accept semua licenses (termasuk preview license)
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> $ANDROID_HOME/licenses/android-sdk-license
+          
+          # Tambahkan license untuk semua package
+          echo "33b4fbf5b9b418acf5480b5279a3599175f2bb1a" >> $ANDROID_HOME/licenses/android-sdk-license
+          
+          echo "📋 License files:"
+          ls -la $ANDROID_HOME/licenses/
+          cat $ANDROID_HOME/licenses/android-sdk-license
+          echo "✅ Android SDK licenses accepted!"
+
+      # ─── INSTALL SYSTEM DEPENDENCIES ────────────────────
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -49,14 +79,19 @@ jobs:
             libgtk-3-dev \
             liblzma-dev \
             git \
-            unzip
+            unzip \
+            curl \
+            wget \
+            imagemagick
 
-      # 1. Create Flutter WebView project
+      # ─── CREATE FLUTTER WEBVIEW PROJECT ─────────────────
       - name: Create WebView Flutter project
         id: create_project
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g')
+          
+          echo "📱 Creating project: $PACKAGE_NAME"
           
           # Buat project Flutter
           flutter create --org com.web2apk --project-name "$PACKAGE_NAME" webapp
@@ -64,23 +99,36 @@ jobs:
           cd webapp
           
           # Tambahkan dependency webview_flutter
-          echo "" >> pubspec.yaml
-          echo "dependencies:" >> pubspec.yaml
-          echo "  webview_flutter: ^4.7.0" >> pubspec.yaml
+          cat >> pubspec.yaml << 'EOF'
+          
+          dependencies:
+            webview_flutter: ^4.7.0
+          EOF
           
           flutter pub get
+          echo "✅ Project created!"
 
-      # 2. Download icon
-      - name: Download icon
+      # ─── DOWNLOAD & RESIZE ICON ──────────────────────────
+      - name: Download and resize icon
         run: |
           ICON_URL="${{ github.event.inputs.icon_url }}"
+          echo "🖼️ Downloading icon from: $ICON_URL"
+          
+          # Buat folder icon
           mkdir -p webapp/android/app/src/main/res/mipmap-hdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-mdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxhdpi
           mkdir -p webapp/android/app/src/main/res/mipmap-xxxhdpi
           
+          # Download icon
           curl -L -o icon.png "$ICON_URL"
+          
+          # Cek apakah file berhasil download
+          if [ ! -f "icon.png" ]; then
+            echo "❌ Failed to download icon!"
+            exit 1
+          fi
           
           # Resize icon untuk berbagai resolusi
           convert icon.png -resize 48x48 webapp/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
@@ -88,12 +136,15 @@ jobs:
           convert icon.png -resize 96x96 webapp/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
           convert icon.png -resize 144x144 webapp/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert icon.png -resize 192x192 webapp/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          
+          echo "✅ Icon resized successfully!"
 
-      # 3. Generate WebView code
+      # ─── GENERATE WEBVIEW CODE ───────────────────────────
       - name: Generate WebView code
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           WEB_URL="${{ github.event.inputs.web_url }}"
+          PACKAGE_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g')
           
           cat > webapp/lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
@@ -110,6 +161,7 @@ jobs:
                 title: 'APP_NAME_PLACEHOLDER',
                 theme: ThemeData(
                   primarySwatch: Colors.blue,
+                  useMaterial3: true,
                 ),
                 home: WebViewScreen(),
                 debugShowCheckedModeBanner: false,
@@ -119,7 +171,7 @@ jobs:
           
           class WebViewScreen extends StatefulWidget {
             @override
-            _WebViewScreenState createState() => _WebViewScreenState();
+            State<WebViewScreen> createState() => _WebViewScreenState();
           }
           
           class _WebViewScreenState extends State<WebViewScreen> {
@@ -130,6 +182,16 @@ jobs:
               super.initState();
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onProgress: (int progress) {
+                      // Optional: handle progress
+                    },
+                    onPageStarted: (String url) {},
+                    onPageFinished: (String url) {},
+                    onWebResourceError: (WebResourceError error) {},
+                  ),
+                )
                 ..loadRequest(Uri.parse('WEB_URL_PLACEHOLDER'));
             }
           
@@ -139,6 +201,8 @@ jobs:
                 appBar: AppBar(
                   title: Text('APP_NAME_PLACEHOLDER'),
                   centerTitle: true,
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
                 ),
                 body: WebViewWidget(controller: controller),
               );
@@ -149,32 +213,51 @@ jobs:
           # Ganti placeholder
           sed -i "s|APP_NAME_PLACEHOLDER|$APP_NAME|g" webapp/lib/main.dart
           sed -i "s|WEB_URL_PLACEHOLDER|$WEB_URL|g" webapp/lib/main.dart
+          
+          echo "✅ WebView code generated!"
 
-      # 4. Update Android Manifest
+      # ─── UPDATE ANDROID MANIFEST ─────────────────────────
       - name: Update Android Manifest
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           
+          # Ganti label aplikasi
           sed -i 's|<application|<application android:label="'"$APP_NAME"'"|g' \
             webapp/android/app/src/main/AndroidManifest.xml
+          
+          # Tambahkan internet permission jika belum ada
+          if ! grep -q "android.permission.INTERNET" webapp/android/app/src/main/AndroidManifest.xml; then
+            sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' \
+              webapp/android/app/src/main/AndroidManifest.xml
+          fi
+          
+          echo "✅ Android Manifest updated!"
 
-      # 5. Build APK
+      # ─── BUILD APK ─────────────────────────────────────────
       - name: Build APK
         id: build_apk
         run: |
           cd webapp
+          
+          echo "🔨 Building APK..."
           flutter build apk --release
           
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            echo "✅ APK built!"
-            echo "APK_SIZE=$(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)" >> $GITHUB_OUTPUT
+          # Cek hasil build
+          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          
+          if [ -f "$APK_PATH" ]; then
+            echo "✅ APK built successfully!"
+            echo "APK_SIZE=$(du -h $APK_PATH | cut -f1)" >> $GITHUB_OUTPUT
+            echo "APK_PATH=$APK_PATH" >> $GITHUB_OUTPUT
           else
-            echo "❌ Build failed!"
+            echo "❌ APK not found!"
+            echo "📂 Checking build output:"
+            find . -name "*.apk" 2>/dev/null || echo "No APK found"
             exit 1
           fi
 
-      # 6. Upload APK
-      - name: Upload APK
+      # ─── UPLOAD APK ────────────────────────────────────────
+      - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
           name: webapp-apk
@@ -182,6 +265,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+      # ─── BUILD SUMMARY ────────────────────────────────────
       - name: Build Summary
         run: |
           echo "## ✅ Web to APK Successful!" >> $GITHUB_STEP_SUMMARY
@@ -191,3 +275,8 @@ jobs:
           echo "| App Name | ${{ github.event.inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Web URL | ${{ github.event.inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
           echo "| APK Size | ${{ steps.build_apk.outputs.APK_SIZE }} |" >> $GITHUB_STEP_SUMMARY
+          
+      - name: Show APK location
+        run: |
+          echo "📱 APK Location:"
+          find . -name "*.apk" -type f -exec ls -la {} \;
