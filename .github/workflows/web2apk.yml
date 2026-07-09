@@ -63,27 +63,70 @@ jobs:
           flutter create --org com.web2apk --project-name "$PROJECT_NAME" --platforms android "$PROJECT_NAME"
           cd "$PROJECT_NAME"
           
-          # ========== DOWNLOAD ICON ==========
+          # ========== DOWNLOAD DAN VALIDASI ICON ==========
           mkdir -p assets/icon assets/splash
           
           echo "⬇️ Downloading icon..."
           
-          # Download dengan curl (paling simple)
-          curl -L -o assets/icon/icon.png "$ICON_URL" 2>/dev/null || \
-          curl -L -o assets/icon/icon.png "${ICON_URL}?raw=true" 2>/dev/null
+          # Download icon ke file temporary
+          curl -L -o /tmp/icon_download "$ICON_URL" 2>/dev/null || \
+          curl -L -o /tmp/icon_download "${ICON_URL}?raw=true" 2>/dev/null
           
-          # Cek apakah icon berhasil di download
+          # Cek apakah file berhasil di download
+          if [ -f /tmp/icon_download ] && [ -s /tmp/icon_download ]; then
+            echo "✅ File downloaded"
+            
+            # Cek tipe file
+            FILE_TYPE=$(file -b --mime-type /tmp/icon_download 2>/dev/null || echo "")
+            echo "📋 File type: $FILE_TYPE"
+            
+            # Coba konversi ke PNG
+            if command -v convert &> /dev/null; then
+              echo "🔄 Converting to PNG..."
+              # Force convert ke PNG
+              convert /tmp/icon_download -resize 512x512 -quality 95 assets/icon/icon.png 2>/dev/null
+              
+              # Jika convert gagal, coba dengan format lain
+              if [ ! -f assets/icon/icon.png ] || [ ! -s assets/icon/icon.png ]; then
+                echo "🔄 Trying alternative conversion..."
+                convert /tmp/icon_download[0] -resize 512x512 -quality 95 assets/icon/icon.png 2>/dev/null || \
+                convert /tmp/icon_download -background white -flatten -resize 512x512 -quality 95 assets/icon/icon.png 2>/dev/null
+              fi
+            else
+              # Jika ImageMagick tidak ada, copy langsung
+              cp /tmp/icon_download assets/icon/icon.png
+            fi
+          fi
+          
+          # ========== BUAT PLACEHOLDER JIKA ICON GAGAL ==========
           if [ ! -f assets/icon/icon.png ] || [ ! -s assets/icon/icon.png ]; then
-            echo "❌ Gagal download icon, membuat placeholder..."
-            # Buat icon placeholder biru dengan tulisan APP
-            convert -size 512x512 xc:#2196F3 -fill white -gravity center \
-              -font Arial -pointsize 80 -annotate 0 "APP" \
-              assets/icon/icon.png 2>/dev/null || \
-            echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > assets/icon/icon.png
+            echo "❌ Gagal membuat icon, membuat placeholder..."
+            
+            # Coba dengan ImageMagick
+            if command -v convert &> /dev/null; then
+              convert -size 512x512 xc:#2196F3 -fill white -gravity center \
+                -font Arial -pointsize 80 -annotate 0 "APP" \
+                assets/icon/icon.png 2>/dev/null
+            fi
+            
+            # Fallback jika ImageMagick gagal
+            if [ ! -f assets/icon/icon.png ] || [ ! -s assets/icon/icon.png ]; then
+              # Buat PNG minimal (1x1 pixel)
+              echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > assets/icon/icon.png
+            fi
           else
-            echo "✅ Icon berhasil di download"
-            # Resize icon ke 512x512
-            convert assets/icon/icon.png -resize 512x512 -quality 90 assets/icon/icon.png 2>/dev/null || true
+            echo "✅ Icon berhasil dibuat: $(du -h assets/icon/icon.png | cut -f1)"
+            
+            # Verifikasi icon bisa dibaca
+            if command -v identify &> /dev/null; then
+              identify assets/icon/icon.png > /dev/null 2>&1
+              if [ $? -ne 0 ]; then
+                echo "⚠️ Icon tidak valid, membuat placeholder..."
+                convert -size 512x512 xc:#2196F3 -fill white -gravity center \
+                  -font Arial -pointsize 80 -annotate 0 "APP" \
+                  assets/icon/icon.png 2>/dev/null
+              fi
+            fi
           fi
           
           # Copy untuk splash screen
@@ -159,9 +202,15 @@ jobs:
           EOF
 
           # ========== GENERATE ICON ==========
+          echo "🔄 Generating launcher icons..."
           flutter pub get
-          flutter pub run flutter_launcher_icons:main -f pubspec.yaml
-          flutter pub run flutter_native_splash:create --flavor android || echo "Splash skipped"
+          
+          # Generate icon dengan force
+          flutter pub run flutter_launcher_icons:main -f pubspec.yaml || \
+          echo "⚠️ Icon generation warning, continuing..."
+          
+          # Generate splash
+          flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash skipped"
 
           # ========== BUAT MAIN.DART ==========
           mkdir -p lib
