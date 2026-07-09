@@ -23,18 +23,15 @@ jobs:
     timeout-minutes: 35
     
     steps:
-      # ==================== CHECKOUT ====================
       - name: Checkout Repository
         uses: actions/checkout@v4
         
-      # ==================== SETUP JAVA ====================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
           
-      # ==================== SETUP FLUTTER ====================
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -42,154 +39,57 @@ jobs:
           channel: 'stable'
           cache: true
           
-      - name: Check Flutter Version
-        run: flutter --version
-        
-      # ==================== INSTALL DEPENDENCIES ====================
-      - name: Install System Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            imagemagick \
-            file \
-            wget \
-            curl \
-            sed \
-            coreutils
+          sudo apt-get install -y imagemagick wget curl file
 
-      # ==================== CREATE FLUTTER PROJECT ====================
-      - name: Create Flutter WebView Project
-        id: project_setup
+      - name: Build APK
+        id: build
         run: |
-          echo "📁 Creating Flutter project: ${{ github.event.inputs.app_name }}"
+          # ========== SETUP PROJECT ==========
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          WEB_URL="${{ github.event.inputs.web_url }}"
+          ICON_URL="${{ github.event.inputs.icon_url }}"
           
-          # Create clean project with proper naming
-          PROJECT_NAME=$(echo "${{ github.event.inputs.app_name }}" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
-          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          # Clean project name
+          PROJECT_NAME=$(echo "$APP_NAME" | tr ' ' '_' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]//g')
           
-          flutter create \
-            --org com.web2apk \
-            --project-name "$PROJECT_NAME" \
-            --platforms android \
-            "$PROJECT_NAME"
+          echo "📱 Building: $APP_NAME"
+          echo "🌐 URL: $WEB_URL"
+          echo "🖼️ Icon: $ICON_URL"
           
+          # Create Flutter project
+          flutter create --org com.web2apk --project-name "$PROJECT_NAME" --platforms android "$PROJECT_NAME"
           cd "$PROJECT_NAME"
           
-          # ==================== DOWNLOAD AND CONVERT ICON ====================
-          echo "🖼️ Downloading and processing icon..."
+          # ========== DOWNLOAD ICON ==========
+          mkdir -p assets/icon assets/splash
           
-          # Create assets directories
-          mkdir -p assets/icon
-          mkdir -p assets/splash
+          echo "⬇️ Downloading icon..."
           
-          # Download icon
-          ICON_URL="${{ github.event.inputs.icon_url }}"
-          ICON_PATH="assets/icon/icon.png"
+          # Download dengan curl (paling simple)
+          curl -L -o assets/icon/icon.png "$ICON_URL" 2>/dev/null || \
+          curl -L -o assets/icon/icon.png "${ICON_URL}?raw=true" 2>/dev/null
           
-          echo "📥 Downloading icon from: $ICON_URL"
-          
-          # Download icon dengan berbagai metode fallback
-          DOWNLOAD_SUCCESS=false
-          
-          # Try curl with different options
-          if command -v curl &> /dev/null; then
-            curl -L -o "$ICON_PATH" "$ICON_URL" && DOWNLOAD_SUCCESS=true || \
-            curl -L -o "$ICON_PATH" "${ICON_URL}?raw=true" && DOWNLOAD_SUCCESS=true || \
-            curl -L -o "$ICON_PATH" "${ICON_URL}/raw/main/icon.png" && DOWNLOAD_SUCCESS=true || \
-            curl -L -o "$ICON_PATH" "${ICON_URL}/raw/master/icon.png" && DOWNLOAD_SUCCESS=true
-          fi
-          
-          # Try wget if curl failed
-          if [ "$DOWNLOAD_SUCCESS" = false ] && command -v wget &> /dev/null; then
-            wget -O "$ICON_PATH" "$ICON_URL" && DOWNLOAD_SUCCESS=true || \
-            wget -O "$ICON_PATH" "${ICON_URL}?raw=true" && DOWNLOAD_SUCCESS=true || \
-            wget -O "$ICON_PATH" "${ICON_URL}/raw/main/icon.png" && DOWNLOAD_SUCCESS=true || \
-            wget -O "$ICON_PATH" "${ICON_URL}/raw/master/icon.png" && DOWNLOAD_SUCCESS=true
-          fi
-          
-          # Check if icon exists and has content
-          if [ ! -f "$ICON_PATH" ] || [ ! -s "$ICON_PATH" ]; then
-            echo "❌ Failed to download icon!"
-            echo "Creating placeholder icon..."
-            
-            # Create placeholder icon menggunakan ImageMagick
-            if command -v convert &> /dev/null; then
-              convert -size 512x512 xc:#2196F3 -fill white -gravity center \
-                -font Arial -pointsize 80 -annotate 0 "📱" \
-                "$ICON_PATH" 2>/dev/null || \
-              convert -size 512x512 xc:#2196F3 -fill white -gravity center \
-                -font Arial -pointsize 60 -annotate 0 "APP" \
-                "$ICON_PATH"
-            else
-              # Fallback: buat file PNG minimal (1x1 transparent pixel)
-              echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > "$ICON_PATH"
-            fi
-            echo "⚠️ Using placeholder icon"
+          # Cek apakah icon berhasil di download
+          if [ ! -f assets/icon/icon.png ] || [ ! -s assets/icon/icon.png ]; then
+            echo "❌ Gagal download icon, membuat placeholder..."
+            # Buat icon placeholder biru dengan tulisan APP
+            convert -size 512x512 xc:#2196F3 -fill white -gravity center \
+              -font Arial -pointsize 80 -annotate 0 "APP" \
+              assets/icon/icon.png 2>/dev/null || \
+            echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > assets/icon/icon.png
           else
-            echo "✅ Icon downloaded successfully: $(du -h "$ICON_PATH" | cut -f1)"
+            echo "✅ Icon berhasil di download"
+            # Resize icon ke 512x512
+            convert assets/icon/icon.png -resize 512x512 -quality 90 assets/icon/icon.png 2>/dev/null || true
           fi
           
-          # Verify icon is valid image
-          if command -v file &> /dev/null; then
-            FILE_TYPE=$(file -b --mime-type "$ICON_PATH" 2>/dev/null || echo "")
-            if [[ "$FILE_TYPE" != image/* ]] && [[ "$FILE_TYPE" != "" ]]; then
-              echo "⚠️ Downloaded file is not an image: $FILE_TYPE"
-              echo "Creating placeholder icon..."
-              # Buat ulang placeholder
-              if command -v convert &> /dev/null; then
-                convert -size 512x512 xc:#2196F3 -fill white -gravity center \
-                  -font Arial -pointsize 80 -annotate 0 "📱" \
-                  "$ICON_PATH"
-              else
-                echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > "$ICON_PATH"
-              fi
-            fi
-          fi
+          # Copy untuk splash screen
+          cp assets/icon/icon.png assets/splash/splash.png
           
-          # Process icon with ImageMagick (resize and optimize)
-          if command -v convert &> /dev/null; then
-            echo "🔄 Processing icon with ImageMagick..."
-            # Create multiple sizes for better quality
-            convert "$ICON_PATH" -resize 512x512 -quality 90 "$ICON_PATH" 2>/dev/null || true
-            
-            # Create backup
-            cp "$ICON_PATH" "${ICON_PATH}.backup"
-            
-            # Ensure icon is square and minimum size
-            convert "$ICON_PATH" -background none -gravity center \
-              -extent 512x512 "$ICON_PATH" 2>/dev/null || true
-          fi
-          
-          # Create splash screen image
-          echo "🖼️ Creating splash screen image..."
-          SPLASH_PATH="assets/splash/splash.png"
-          
-          if [ -f "$ICON_PATH" ] && [ -s "$ICON_PATH" ]; then
-            # Copy icon ke splash
-            cp "$ICON_PATH" "$SPLASH_PATH"
-            
-            # Process splash image
-            if command -v convert &> /dev/null; then
-              # Create splash with white background and centered icon
-              convert -size 200x200 xc:white "$SPLASH_PATH" -gravity center \
-                -resize 150x150 -composite "$SPLASH_PATH" 2>/dev/null || \
-              cp "$ICON_PATH" "$SPLASH_PATH"
-            fi
-            echo "✅ Splash image prepared"
-          else
-            echo "⚠️ Creating default splash image"
-            if command -v convert &> /dev/null; then
-              convert -size 200x200 xc:white -fill '#2196F3' -gravity center \
-                -font Arial -pointsize 60 -annotate 0 "📱" \
-                "$SPLASH_PATH"
-            else
-              echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > "$SPLASH_PATH"
-            fi
-          fi
-          
-          echo "✅ Icon processing completed!"
-          
-          # ==================== UPDATE PUBSPEC ====================
+          # ========== BUAT PUBSPEC.YAML ==========
           cat > pubspec.yaml << EOF
           name: $PROJECT_NAME
           description: Web to APK app
@@ -202,16 +102,13 @@ jobs:
             flutter:
               sdk: flutter
             webview_flutter: ^4.4.0
-            url_launcher: ^6.3.0
-            connectivity_plus: ^6.0.0
-            permission_handler: ^11.0.0
-            flutter_native_splash: ^2.4.0
             
           dev_dependencies:
             flutter_test:
               sdk: flutter
             flutter_lints: ^3.0.0
             flutter_launcher_icons: ^0.13.0
+            flutter_native_splash: ^2.4.0
             
           flutter_launcher_icons:
             android: true
@@ -227,13 +124,10 @@ jobs:
             
           flutter:
             uses-material-design: true
-            assets:
-              - assets/icon/
-              - assets/splash/
           EOF
           
-          # ==================== CREATE ANDROID MANIFEST ====================
-          ESCAPED_APP_NAME=$(echo "${{ github.event.inputs.app_name }}" | sed 's/"/\\"/g')
+          # ========== BUAT ANDROID MANIFEST ==========
+          ESCAPED_APP_NAME=$(echo "$APP_NAME" | sed 's/"/\\"/g')
           
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << EOF
@@ -241,29 +135,20 @@ jobs:
               package="com.web2apk.$PROJECT_NAME">
               
               <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
               
               <application
                   android:label="$ESCAPED_APP_NAME"
                   android:name="\${applicationName}"
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true"
-                  android:allowBackup="true"
                   android:theme="@style/LaunchTheme">
                   
-                  <meta-data
-                      android:name="flutterEmbedding"
-                      android:value="2" />
-                      
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
-                      android:launchMode="singleTop"
                       android:theme="@style/LaunchTheme"
                       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                      android:hardwareAccelerated="true"
-                      android:windowSoftInputMode="adjustResize">
+                      android:hardwareAccelerated="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -273,20 +158,13 @@ jobs:
           </manifest>
           EOF
 
-          # ==================== GENERATE ICONS & SPLASH ====================
-          echo "🖼️ Generating app icons and splash..."
+          # ========== GENERATE ICON ==========
           flutter pub get
-          
-          # Generate launcher icons
           flutter pub run flutter_launcher_icons:main -f pubspec.yaml
-          
-          # Generate splash screen
-          flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
+          flutter pub run flutter_native_splash:create --flavor android || echo "Splash skipped"
 
-          # ==================== CREATE MAIN.DART ====================
+          # ========== BUAT MAIN.DART ==========
           mkdir -p lib
-          
-          ESCAPED_URL=$(echo "${{ github.event.inputs.web_url }}" | sed 's/"/\\"/g')
           
           cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
@@ -323,92 +201,30 @@ jobs:
           class _WebViewScreenState extends State<WebViewScreen> {
             late final WebViewController controller;
             bool isLoading = true;
-            String errorMessage = '';
 
             @override
             void initState() {
               super.initState();
-              _initWebView();
-            }
-
-            void _initWebView() {
-              final url = Uri.parse("URL_PLACEHOLDER");
-
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..setBackgroundColor(const Color(0xFF000000))
                 ..setNavigationDelegate(
                   NavigationDelegate(
-                    onPageStarted: (String url) {
-                      setState(() {
-                        isLoading = true;
-                        errorMessage = '';
-                      });
-                    },
-                    onPageFinished: (String url) {
-                      setState(() {
-                        isLoading = false;
-                      });
-                    },
-                    onWebResourceError: (WebResourceError error) {
-                      setState(() {
-                        isLoading = false;
-                        errorMessage = 'Error: ${error.description}';
-                      });
-                    },
+                    onPageStarted: (url) => setState(() => isLoading = true),
+                    onPageFinished: (url) => setState(() => isLoading = false),
                   ),
                 )
-                ..loadRequest(url);
+                ..loadRequest(Uri.parse("URL_PLACEHOLDER"));
             }
 
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                extendBodyBehindAppBar: true, 
                 body: Stack(
                   children: [
                     WebViewWidget(controller: controller),
                     if (isLoading)
                       const Center(
-                        child: CircularProgressIndicator(
-                          color: Colors.blue,
-                          strokeWidth: 3.0,
-                        ),
-                      ),
-                    if (errorMessage.isNotEmpty)
-                      Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.error_outline, color: Colors.red, size: 48),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'Gagal Memuat Halaman',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              errorMessage,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.grey, fontSize: 14),
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  errorMessage = '';
-                                  isLoading = true;
-                                });
-                                controller.reload();
-                              },
-                              child: const Text('Coba Lagi'),
-                            ),
-                          ],
-                        ),
+                        child: CircularProgressIndicator(color: Colors.blue),
                       ),
                   ],
                 ),
@@ -417,34 +233,27 @@ jobs:
           }
           EOF
           
-          # Suntikkan URL dan nama aplikasi
-          sed -i "s|URL_PLACEHOLDER|$ESCAPED_URL|g" lib/main.dart
+          # Masukkan URL
+          sed -i "s|URL_PLACEHOLDER|$WEB_URL|g" lib/main.dart
           sed -i "s|Web App|$ESCAPED_APP_NAME|g" lib/main.dart
           
-          # ==================== CLEANUP ====================
-          echo "🧹 Cleaning up temporary files..."
-          rm -f "${ICON_PATH}.backup" 2>/dev/null || true
-          
-      # ==================== BUILD APK ====================
-      - name: Build APK
-        id: build
-        run: |
-          PROJECT_NAME="${{ steps.project_setup.outputs.PROJECT_NAME }}"
-          cd "$PROJECT_NAME"
+          # ========== BUILD APK ==========
+          echo "🔨 Building APK..."
           flutter clean
           flutter pub get
           flutter build apk --release
+          
           if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "✅ Build sukses!"
             echo "APK_SIZE=$(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)" >> $GITHUB_OUTPUT
-            echo "✅ Build success!"
           else
-            echo "❌ Build failed!"
+            echo "❌ Build gagal!"
             exit 1
           fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: webapp-apk
-          path: ${{ steps.project_setup.outputs.PROJECT_NAME }}/build/app/outputs/flutter-apk/*.apk
+          name: ${{ github.event.inputs.app_name }}-apk
+          path: ${{ github.event.inputs.app_name }}/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
