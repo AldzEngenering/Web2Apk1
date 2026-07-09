@@ -1,4 +1,4 @@
-Name: Web to APK Builder
+name: Web to APK Builder
 
 on:
   workflow_dispatch:
