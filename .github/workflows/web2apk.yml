@@ -150,155 +150,10 @@ jobs:
               - assets/splash/
           EOF
           
-          # ==================== GENERATE ICONS & SPLASH FIRST ====================
-          # Kita jalankan generator sebelum menimpa AndroidManifest agar perubahan asetnya tidak terhapus
-          echo "🖼️ Generating app icons and splash..."
-          flutter pub get
-          flutter pub run flutter_launcher_icons:main -f pubspec.yaml || echo "⚠️ Icon generation skipped"
-          flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
-
-          # ==================== CREATE MAIN.DART (FULL SCREEN MODIFIED) ====================
-          mkdir -p lib
-          
-          # Escape the URL for use in Dart code
-          ESCAPED_URL=$(echo "${{ github.event.inputs.web_url }}" | sed 's/"/\\"/g')
+          # ==================== CREATE ANDROID MANIFEST FIRST ====================
+          # Kita buat manifest kustom terlebih dahulu agar siap diproses oleh generator ikon
           ESCAPED_APP_NAME=$(echo "${{ github.event.inputs.app_name }}" | sed 's/"/\\"/g')
           
-          cat > lib/main.dart << EOF
-          import 'package:flutter/material.dart';
-          import 'package:flutter/services.dart';
-          import 'package:webview_flutter/webview_flutter.dart';
-
-          void main() {
-            // Memastikan binding Flutter terinisialisasi untuk mengaktifkan fitur full screen/SystemChrome
-            WidgetsFlutterBinding.ensureInitialized();
-            
-            // Menyembunyikan status bar atas dan navigation bar bawah (Immersive Full Screen)
-            SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-            
-            runApp(const MyApp());
-          }
-
-          class MyApp extends StatelessWidget {
-            const MyApp({super.key});
-
-            @override
-            Widget build(BuildContext context) {
-              return MaterialApp(
-                title: '$ESCAPED_APP_NAME',
-                theme: ThemeData.dark(),
-                home: const WebViewScreen(),
-                debugShowCheckedModeBanner: false,
-              );
-            }
-          }
-
-          class WebViewScreen extends StatefulWidget {
-            const WebViewScreen({super.key});
-
-            @override
-            State<WebViewScreen> createState() => _WebViewScreenState();
-          }
-
-          class _WebViewScreenState extends State<WebViewScreen> {
-            late final WebViewController controller;
-            bool isLoading = true;
-            String errorMessage = '';
-
-            @override
-            void initState() {
-              super.initState();
-              _initWebView();
-            }
-
-            void _initWebView() {
-              final url = Uri.parse('$ESCAPED_URL');
-
-              controller = WebViewController()
-                ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..setBackgroundColor(const Color(0xFF000000))
-                ..setNavigationDelegate(
-                  NavigationDelegate(
-                    onPageStarted: (String url) {
-                      setState(() {
-                        isLoading = true;
-                        errorMessage = '';
-                      });
-                    },
-                    onPageFinished: (String url) {
-                      setState(() {
-                        isLoading = false;
-                      });
-                    },
-                    onWebResourceError: (WebResourceError error) {
-                      setState(() {
-                        isLoading = false;
-                        errorMessage = 'Error: ${error.description}';
-                      });
-                    },
-                  ),
-                )
-                ..loadRequest(url);
-            }
-
-            @override
-            Widget build(BuildContext context) {
-              return Scaffold(
-                // Mengizinkan isi body (WebView) memenuhi layar hingga ke belakang notch/status bar
-                extendBodyBehindAppBar: true, 
-                body: Stack(
-                  children: [
-                    WebViewWidget(controller: controller),
-                    if (isLoading)
-                      const Center(
-                        child: CircularProgressIndicator(
-                          color: Colors.blue,
-                          strokeWidth: 3.0,
-                        ),
-                      ),
-                    if (errorMessage.isNotEmpty)
-                      Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.error_outline, color: Colors.red, size: 48),
-                            const SizedBox(height: 16),
-                            Text(
-                              'Gagal Memuat Halaman',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              errorMessage,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.grey, fontSize: 14),
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  errorMessage = '';
-                                  isLoading = true;
-                                });
-                                controller.reload();
-                              },
-                              child: const Text('Coba Lagi'),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            }
-          }
-          EOF
-          
-          # ==================== CREATE ANDROID MANIFEST ====================
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << EOF
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -336,6 +191,152 @@ jobs:
               </application>
           </manifest>
           EOF
+
+          # ==================== GENERATE ICONS & SPLASH ====================
+          echo "🖼️ Generating app icons and splash..."
+          flutter pub get
+          flutter pub run flutter_launcher_icons:main -f pubspec.yaml || echo "⚠️ Icon generation skipped"
+          flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
+
+          # ==================== CREATE MAIN.DART (SAFE ENVIRONMENT) ====================
+          mkdir -p lib
+          
+          ESCAPED_URL=$(echo "${{ github.event.inputs.web_url }}" | sed 's/"/\\"/g')
+          
+          # Menggunakan 'EOF' dengan tanda petik tunggal agar karakter dolar ($) di dalam kode Dart tidak dianggap variabel Linux shell
+          cat > lib/main.dart << 'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+
+          void main() {
+            WidgetsFlutterBinding.ensureInitialized();
+            SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+            runApp(const MyApp());
+          }
+
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'Web App',
+                theme: ThemeData.dark(),
+                home: const WebViewScreen(),
+                debugShowCheckedModeBanner: false,
+              );
+            }
+          }
+
+          class WebViewScreen extends StatefulWidget {
+            const WebViewScreen({super.key});
+
+            @override
+            State<WebViewScreen> createState() => _WebViewScreenState();
+          }
+
+          class _WebViewScreenState extends State<WebViewScreen> {
+            late final WebViewController controller;
+            bool isLoading = true;
+            String errorMessage = '';
+
+            @override
+            void initState() {
+              super.initState();
+              _initWebView();
+            }
+
+            void _initWebView() {
+              // Mengambil string URL yang disuntikkan secara dinamis saat runtime/build penggantian lewat sed
+              final url = Uri.parse("URL_PLACEHOLDER");
+
+              controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setBackgroundColor(const Color(0xFF000000))
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onPageStarted: (String url) {
+                      setState(() {
+                        isLoading = true;
+                        errorMessage = '';
+                      });
+                    },
+                    onPageFinished: (String url) {
+                      setState(() {
+                        isLoading = false;
+                      });
+                    },
+                    onWebResourceError: (WebResourceError error) {
+                      setState(() {
+                        isLoading = false;
+                        errorMessage = 'Error: ${error.description}';
+                      });
+                    },
+                  ),
+                )
+                ..loadRequest(url);
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                extendBodyBehindAppBar: true, 
+                body: Stack(
+                  children: [
+                    WebViewWidget(controller: controller),
+                    if (isLoading)
+                      const Center(
+                        child: CircularProgressIndicator(
+                          color: Colors.blue,
+                          strokeWidth: 3.0,
+                        ),
+                      ),
+                    if (errorMessage.isNotEmpty)
+                      Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'Gagal Memuat Halaman',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              errorMessage,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.grey, fontSize: 14),
+                            ),
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: () {
+                                setState(() {
+                                  errorMessage = '';
+                                  isLoading = true;
+                                });
+                                controller.reload();
+                              },
+                              child: const Text('Coba Lagi'),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            }
+          }
+          EOF
+          
+          # Suntikkan URL asli dan nama aplikasi ke dalam main.dart secara aman tanpa merusak sintaks shell
+          sed -i "s|URL_PLACEHOLDER|$ESCAPED_URL|g" lib/main.dart
+          sed -i "s|Web App|$ESCAPED_APP_NAME|g" lib/main.dart
           
       # ==================== BUILD APK ====================
       - name: Build APK
