@@ -23,15 +23,18 @@ jobs:
     timeout-minutes: 35
     
     steps:
+      # ==================== CHECKOUT ====================
       - name: Checkout Repository
         uses: actions/checkout@v4
         
+      # ==================== SETUP JAVA ====================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
           
+      # ==================== SETUP FLUTTER ====================
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -42,6 +45,7 @@ jobs:
       - name: Check Flutter Version
         run: flutter --version
         
+      # ==================== CREATE FLUTTER PROJECT ====================
       - name: Create Flutter WebView Project
         id: project_setup
         run: |
@@ -59,7 +63,7 @@ jobs:
           
           cd "$PROJECT_NAME"
           
-          # ==================== DOWNLOAD AND CONVERT ICON ====================
+          # ==================== DOWNLOAD AND CONVERT ICON FIRST ====================
           echo "🖼️ Downloading icon from: ${{ github.event.inputs.icon_url }}"
           mkdir -p assets/icon
           mkdir -p assets/splash
@@ -68,83 +72,54 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y imagemagick
           
-          # Download icon with better error handling
-          echo "🔗 Downloading icon..."
+          # Download icon with retry
+          echo "🔗 icon_url yang diterima dari input: ${{ github.event.inputs.icon_url }}"
+          echo "Downloading icon..."
           DOWNLOAD_OK=false
-          
-          # Try to download with curl, following redirects and with proper user agent
           if curl -f -L --max-time 30 \
                -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-               -o assets/icon/icon_downloaded \
-               "${{ github.event.inputs.icon_url }}"; then
-            
-            echo "✅ HTTP download completed"
-            
-            # Check if file is empty
-            if [ ! -s assets/icon/icon_downloaded ]; then
-              echo "⚠️ Downloaded file is empty"
+               -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}"; then
+            echo "✅ HTTP request sukses (status 2xx)"
+
+            # Detect file type
+            file assets/icon/icon_downloaded
+
+            # Validasi bahwa file yang didownload benar-benar gambar valid
+            # (mencegah HTML error page / file kosong dianggap sebagai icon)
+            if identify assets/icon/icon_downloaded > /dev/null 2>&1; then
+              echo "✅ File terverifikasi sebagai gambar valid"
+              DOWNLOAD_OK=true
             else
-              # Try to identify the file type
-              FILE_TYPE=$(file -b --mime-type assets/icon/icon_downloaded 2>/dev/null || echo "unknown")
-              echo "📁 File type: $FILE_TYPE"
-              
-              # Check if it's actually an image
-              if [[ "$FILE_TYPE" == image/* ]]; then
-                echo "✅ File is a valid image"
-                DOWNLOAD_OK=true
-              else
-                echo "⚠️ File is not a recognized image type: $FILE_TYPE"
-                echo "📄 First 200 bytes of file:"
-                head -c 200 assets/icon/icon_downloaded | cat -v
-                echo ""
-                
-                # Try to extract image from HTML/error page (fallback)
-                echo "Attempting to extract image from HTML response..."
-                grep -o 'https://[^"]*\.\(png\|jpg\|jpeg\|gif\|svg\)' assets/icon/icon_downloaded | head -1 > assets/icon/extracted_url.txt
-                if [ -s assets/icon/extracted_url.txt ]; then
-                  EXTRACTED_URL=$(cat assets/icon/extracted_url.txt)
-                  echo "Found image URL in response: $EXTRACTED_URL"
-                  curl -f -L --max-time 30 -o assets/icon/icon_downloaded "$EXTRACTED_URL" && DOWNLOAD_OK=true
-                fi
-              fi
+              echo "⚠️ File yang didownload BUKAN gambar valid (kemungkinan link salah/expired/HTML error page)"
+              echo "--- Isi 200 byte pertama file (untuk debug) ---"
+              head -c 200 assets/icon/icon_downloaded
+              echo ""
+              echo "-----------------------------------------------"
             fi
           else
-            echo "⚠️ Download failed for URL: ${{ github.event.inputs.icon_url }}"
+            echo "⚠️ Download gagal (HTTP error / timeout) untuk URL: ${{ github.event.inputs.icon_url }}"
           fi
           
-          # Create icon if download failed or file is invalid
-          if [ "$DOWNLOAD_OK" != true ]; then
-            echo "⚠️ Using default icon (download failed or file invalid)"
-            # Create a simple default icon
-            convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
-          else
-            # Try to convert downloaded image to PNG
-            if ! convert assets/icon/icon_downloaded -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null; then
-              if ! convert assets/icon/icon_downloaded -resize 512x512 assets/icon/icon.png 2>/dev/null; then
-                echo "⚠️ Icon conversion failed, creating default icon"
-                convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
-              fi
-            fi
-          fi
-          
-          # Verify PNG was created
-          if [ ! -f assets/icon/icon.png ] || [ ! -s assets/icon/icon.png ]; then
-            echo "⚠️ No valid icon found, creating default icon"
-            convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
-          fi
-          
-          # Verify PNG is valid
-          if ! identify assets/icon/icon.png > /dev/null 2>&1; then
-            echo "⚠️ Invalid PNG file, recreating default icon"
-            convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
-          fi
-          
+          if [ "$DOWNLOAD_OK" = true ]; then
+             if convert assets/icon/icon_downloaded -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null; then
+        echo "✅ Icon converted to PNG successfully"
+     else
+        echo "⚠️ Gagal konversi, coba fallback..."
+          curl -f -L --max-time 30 -H "Accept: image/*" -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}"
+           if convert assets/icon/icon_downloaded -resize 512x512 assets/icon/icon.png 2>/dev/null; then
+      echo "✅ Icon berhasil dikonversi (fallback)"
+    else
+      echo "⚠️ Icon tetap gagal, pakai default"
+      convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
+    fi
+  fi
+fi
           # Copy icon as splash
           cp assets/icon/icon.png assets/splash/splash.png
           
           echo "✅ Icon prepared:"
           ls -la assets/icon/
-          identify assets/icon/icon.png || echo "⚠️ Cannot identify icon file"
+          ls -la assets/splash/
           
           # ==================== UPDATE PUBSPEC ====================
           cat > pubspec.yaml << EOF
@@ -189,7 +164,8 @@ jobs:
               - assets/splash/
           EOF
           
-          # ==================== CREATE ANDROID MANIFEST ====================
+          # ==================== CREATE ANDROID MANIFEST FIRST ====================
+          # Kita buat manifest kustom terlebih dahulu agar siap diproses oleh generator ikon
           ESCAPED_APP_NAME=$(echo "${{ github.event.inputs.app_name }}" | sed 's/"/\\"/g')
           
           mkdir -p android/app/src/main
@@ -233,14 +209,15 @@ jobs:
           # ==================== GENERATE ICONS & SPLASH ====================
           echo "🖼️ Generating app icons and splash..."
           flutter pub get
-          flutter pub run flutter_launcher_icons:main -f pubspec.yaml || echo "⚠️ Icon generation skipped"
+          flutter pub run flutter_launcher_icons:main -f pubspec.yaml
           flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
 
-          # ==================== CREATE MAIN.DART ====================
+          # ==================== CREATE MAIN.DART (SAFE ENVIRONMENT) ====================
           mkdir -p lib
           
           ESCAPED_URL=$(echo "${{ github.event.inputs.web_url }}" | sed 's/"/\\"/g')
           
+          # Menggunakan 'EOF' dengan tanda petik tunggal agar karakter dolar ($) di dalam kode Dart tidak dianggap variabel Linux shell
           cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
@@ -285,6 +262,7 @@ jobs:
             }
 
             void _initWebView() {
+              // Mengambil string URL yang disuntikkan secara dinamis saat runtime/build penggantian lewat sed
               final url = Uri.parse("URL_PLACEHOLDER");
 
               controller = WebViewController()
@@ -370,10 +348,11 @@ jobs:
           }
           EOF
           
-          # Suntikkan URL asli dan nama aplikasi ke dalam main.dart
+          # Suntikkan URL asli dan nama aplikasi ke dalam main.dart secara aman tanpa merusak sintaks shell
           sed -i "s|URL_PLACEHOLDER|$ESCAPED_URL|g" lib/main.dart
           sed -i "s|Web App|$ESCAPED_APP_NAME|g" lib/main.dart
           
+      # ==================== BUILD APK ====================
       - name: Build APK
         id: build
         run: |
