@@ -90,11 +90,53 @@ jobs:
               echo "✅ File terverifikasi sebagai gambar valid"
               DOWNLOAD_OK=true
             else
-              echo "⚠️ File yang didownload BUKAN gambar valid (kemungkinan link salah/expired/HTML error page)"
-              echo "--- Isi 200 byte pertama file (untuk debug) ---"
-              head -c 200 assets/icon/icon_downloaded
-              echo ""
-              echo "-----------------------------------------------"
+              echo "⚠️ File yang didownload BUKAN gambar langsung, mengecek apakah ini raw multipart/form-data..."
+
+              # Kadang icon_url yang dikirim bot ternyata mengembalikan mentahan
+              # body multipart/form-data (ada boundary + Content-Disposition) alih-alih
+              # file gambar murni. Kalau begini, kita coba ekstrak gambar aslinya.
+              python3 - << 'PYEOF'
+          import re
+
+          path = "assets/icon/icon_downloaded"
+          with open(path, "rb") as f:
+              data = f.read()
+
+          m = re.match(rb"(--[^\r\n]+)\r?\n", data)
+          if not m:
+              raise SystemExit(1)
+
+          boundary = m.group(1)
+          headers_end = data.find(b"\r\n\r\n")
+          if headers_end == -1:
+              raise SystemExit(1)
+
+          body_start = headers_end + 4
+          next_boundary = data.find(boundary, body_start)
+          if next_boundary == -1:
+              raise SystemExit(1)
+
+          body = data[body_start:next_boundary]
+          body = body.rstrip(b"\r\n")
+
+          with open("assets/icon/icon_extracted", "wb") as f:
+              f.write(body)
+          PYEOF
+
+              if [ -f assets/icon/icon_extracted ] && identify assets/icon/icon_extracted > /dev/null 2>&1; then
+                echo "✅ Berhasil ekstrak gambar asli dari dalam multipart body"
+                mv assets/icon/icon_extracted assets/icon/icon_downloaded
+                DOWNLOAD_OK=true
+              else
+                echo "⚠️ File yang didownload BUKAN gambar valid (kemungkinan link salah/expired/HTML error page)"
+                echo "--- Isi 200 byte pertama file (untuk debug) ---"
+                head -c 200 assets/icon/icon_downloaded
+                echo ""
+                echo "-----------------------------------------------"
+                echo "‼️ CATATAN: icon_url ini kelihatannya mengembalikan raw request body (multipart/form-data),"
+                echo "    bukan link gambar langsung. Ini indikasi bug di sisi BOT TELEGRAM saat generate icon_url,"
+                echo "    bukan di workflow ini. Tolong cek ulang cara bot membuat/mengambil link icon."
+              fi
             fi
           else
             echo "⚠️ Download gagal (HTTP error / timeout) untuk URL: ${{ github.event.inputs.icon_url }}"
