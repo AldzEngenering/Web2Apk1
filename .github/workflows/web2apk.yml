@@ -63,64 +63,117 @@ jobs:
           
           cd "$PROJECT_NAME"
           
-          # ==================== DOWNLOAD AND CONVERT ICON FIRST ====================
-          echo "🖼️ Downloading icon from: ${{ github.event.inputs.icon_url }}"
-          mkdir -p assets/icon
-          mkdir -p assets/splash
-          
-          # Install ImageMagick for image conversion
-          sudo apt-get update
-          sudo apt-get install -y imagemagick
-          
-          # Download icon with retry
-          echo "🔗 icon_url yang diterima dari input: ${{ github.event.inputs.icon_url }}"
-          echo "Downloading icon..."
-          DOWNLOAD_OK=false
-          if curl -f -L --max-time 30 \
-               -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-               -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}"; then
-            echo "✅ HTTP request sukses (status 2xx)"
+    # ==================== DOWNLOAD AND CONVERT ICON ====================
+echo "🖼️ Downloading icon from: ${{ github.event.inputs.icon_url }}"
+mkdir -p assets/icon
+mkdir -p assets/splash
 
-            # Detect file type
-            file assets/icon/icon_downloaded
+# Install ImageMagick for image conversion
+sudo apt-get update
+sudo apt-get install -y imagemagick
 
-            # Validasi bahwa file yang didownload benar-benar gambar valid
-            # (mencegah HTML error page / file kosong dianggap sebagai icon)
-            if identify assets/icon/icon_downloaded > /dev/null 2>&1; then
-              echo "✅ File terverifikasi sebagai gambar valid"
-              DOWNLOAD_OK=true
-            else
-              echo "⚠️ File yang didownload BUKAN gambar valid (kemungkinan link salah/expired/HTML error page)"
-              echo "--- Isi 200 byte pertama file (untuk debug) ---"
-              head -c 200 assets/icon/icon_downloaded
-              echo ""
-              echo "-----------------------------------------------"
-            fi
-          else
-            echo "⚠️ Download gagal (HTTP error / timeout) untuk URL: ${{ github.event.inputs.icon_url }}"
-          fi
-          
-          if [ "$DOWNLOAD_OK" = true ]; then
-             if convert assets/icon/icon_downloaded -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null; then
-        echo "✅ Icon converted to PNG successfully"
-     else
-        echo "⚠️ Gagal konversi, coba fallback..."
-          curl -f -L --max-time 30 -H "Accept: image/*" -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}"
-           if convert assets/icon/icon_downloaded -resize 512x512 assets/icon/icon.png 2>/dev/null; then
-      echo "✅ Icon berhasil dikonversi (fallback)"
+# Download icon dengan retry dan multiple user-agent
+echo "🔗 icon_url yang diterima: ${{ github.event.inputs.icon_url }}"
+echo "📥 Downloading icon..."
+
+DOWNLOAD_SUCCESS=false
+ICON_FILE="assets/icon/icon_downloaded"
+
+# Coba download dengan berbagai User-Agent
+for UA in \
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+  "curl/8.0.1"
+do
+  echo "🔄 Mencoba dengan User-Agent: ${UA:0:30}..."
+  if curl -f -L --max-time 30 -A "$UA" -o "$ICON_FILE" "${{ github.event.inputs.icon_url }}"; then
+    echo "✅ Download sukses dengan UA: ${UA:0:30}"
+    # Cek apakah file benar-benar gambar
+    if file "$ICON_FILE" | grep -qiE 'image|png|jpeg|jpg|gif|webp|bmp'; then
+      echo "✅ File terdeteksi sebagai gambar"
+      DOWNLOAD_SUCCESS=true
+      break
     else
-      echo "⚠️ Icon tetap gagal, pakai default"
-      convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
+      echo "⚠️ File bukan gambar, coba UA lain..."
+      # Tampilkan 100 byte pertama untuk debug
+      echo "--- Isi file (100 byte pertama) ---"
+      head -c 100 "$ICON_FILE" | cat -v
+      echo ""
+      echo "-------------------------------------"
+    fi
+  else
+    echo "❌ Download gagal dengan UA ini"
+  fi
+  sleep 1
+done
+
+# Jika semua percobaan gagal, coba dengan wget sebagai fallback
+if [ "$DOWNLOAD_SUCCESS" != "true" ]; then
+  echo "🔄 Mencoba download dengan wget..."
+  if wget -q --timeout=30 -O "$ICON_FILE" "${{ github.event.inputs.icon_url }}"; then
+    if file "$ICON_FILE" | grep -qiE 'image|png|jpeg|jpg|gif|webp|bmp'; then
+      echo "✅ Download dengan wget berhasil!"
+      DOWNLOAD_SUCCESS=true
     fi
   fi
 fi
-          # Copy icon as splash
-          cp assets/icon/icon.png assets/splash/splash.png
-          
-          echo "✅ Icon prepared:"
-          ls -la assets/icon/
-          ls -la assets/splash/
-          
+
+# ==================== KONVERSI ICON ====================
+CONVERT_SUCCESS=false
+
+if [ "$DOWNLOAD_SUCCESS" = "true" ]; then
+  echo "🔄 Mengkonversi icon ke PNG 512x512..."
+  
+  # Coba konversi dengan berbagai metode
+  if convert "$ICON_FILE" -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null; then
+    echo "✅ Icon berhasil dikonversi (metode 1)"
+    CONVERT_SUCCESS=true
+  elif convert "$ICON_FILE" -resize 512x512 assets/icon/icon.png 2>/dev/null; then
+    echo "✅ Icon berhasil dikonversi (metode 2)"
+    CONVERT_SUCCESS=true
+  else
+    echo "⚠️ Gagal konversi, mencoba format lain..."
+    
+    # Coba konversi dengan format intermediate
+    if convert "$ICON_FILE" -background white -flatten PNG32:assets/icon/icon_temp.png 2>/dev/null; then
+      if convert assets/icon/icon_temp.png -resize 512x512 assets/icon/icon.png 2>/dev/null; then
+        echo "✅ Icon berhasil dikonversi (metode 3)"
+        CONVERT_SUCCESS=true
+        rm -f assets/icon/icon_temp.png
+      fi
+    fi
+  fi
+fi
+
+# ==================== VALIDASI HASIL ====================
+if [ "$CONVERT_SUCCESS" != "true" ] || [ ! -f assets/icon/icon.png ] || [ ! -s assets/icon/icon.png ]; then
+  echo "⚠️ Gagal mengkonversi icon, menggunakan icon default"
+  # Buat icon default dengan warna biru dan teks "APP"
+  convert -size 512x512 xc:#2196F3 -fill white -gravity center -pointsize 120 \
+    -font "Arial" -draw "text 0,0 'APP'" assets/icon/icon.png
+  CONVERT_SUCCESS=true
+fi
+
+# ==================== VERIFIKASI AKHIR ====================
+if [ ! -f assets/icon/icon.png ] || [ ! -s assets/icon/icon.png ]; then
+  echo "❌ Gagal membuat icon! Membuat icon darurat..."
+  # Icon darurat dengan teks
+  printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00\x00\x00\x01\x00\x08\x06\x00\x00\x00\x1c\x15\xd2x' > assets/icon/icon.png
+  # Catatan: ini hanya placeholder, sebaiknya gunakan convert
+  convert -size 512x512 xc:#FF5722 -fill white -gravity center -pointsize 100 \
+    -draw "text 0,0 'ERROR'" assets/icon/icon.png
+fi
+
+# Copy icon sebagai splash
+cp assets/icon/icon.png assets/splash/splash.png
+
+echo "✅ Icon final:"
+ls -la assets/icon/
+file assets/icon/icon.png
+identify assets/icon/icon.png 2>/dev/null || echo "⚠️ identify gagal, tapi file ada"
+
+# Bersihkan file sementara
+rm -f assets/icon/icon_downloaded assets/icon/icon_temp.png 2>/dev/null
           # ==================== UPDATE PUBSPEC ====================
           cat > pubspec.yaml << EOF
           name: $PROJECT_NAME
