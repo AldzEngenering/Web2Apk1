@@ -45,6 +45,18 @@ jobs:
       - name: Check Flutter Version
         run: flutter --version
         
+      # ==================== INSTALL DEPENDENCIES ====================
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            imagemagick \
+            file \
+            wget \
+            curl \
+            sed \
+            coreutils
+
       # ==================== CREATE FLUTTER PROJECT ====================
       - name: Create Flutter WebView Project
         id: project_setup
@@ -63,72 +75,120 @@ jobs:
           
           cd "$PROJECT_NAME"
           
-      # ─── 4. VALIDASI URL ──────────────────────────────────────────
-      - name: 🔍 Validasi URL
-        run: |
-          URL="${{ github.event.inputs.web_url }}"
-          if [[ ! "$URL" =~ ^https?:// ]]; then
-            echo "❌ URL tidak valid: $URL"
-            exit 1
-          fi
-          echo "✅ URL valid: $URL"
-
-      # ─── 5. DOWNLOAD & VALIDASI ICON ─────────────────────────────
-      - name: 🖼️ Download & validasi icon
-        run: |
+          # ==================== DOWNLOAD AND CONVERT ICON ====================
+          echo "🖼️ Downloading and processing icon..."
+          
+          # Create assets directories
+          mkdir -p assets/icon
+          mkdir -p assets/splash
+          
+          # Download icon
           ICON_URL="${{ github.event.inputs.icon_url }}"
-          echo "📥 Download icon dari: $ICON_URL"
+          ICON_PATH="assets/icon/icon.png"
           
-          curl -L -o icon_raw.png "$ICON_URL" -H "User-Agent: Mozilla/5.0"
+          echo "📥 Downloading icon from: $ICON_URL"
           
-          if [ ! -f icon_raw.png ]; then
-            echo "❌ Gagal download icon, membuat icon default..."
-            sudo apt-get update -qq
-            sudo apt-get install -yqq imagemagick
-            convert -size 512x512 xc:#2196F3 -fill white -gravity center -font Helvetica -pointsize 80 \
-              -annotate 0 "WEB" icon_work.png
-          else
-            sudo apt-get update -qq
-            sudo apt-get install -yqq imagemagick file
-            file icon_raw.png
+          # Download icon dengan berbagai metode fallback
+          DOWNLOAD_SUCCESS=false
+          
+          # Try curl with different options
+          if command -v curl &> /dev/null; then
+            curl -L -o "$ICON_PATH" "$ICON_URL" && DOWNLOAD_SUCCESS=true || \
+            curl -L -o "$ICON_PATH" "${ICON_URL}?raw=true" && DOWNLOAD_SUCCESS=true || \
+            curl -L -o "$ICON_PATH" "${ICON_URL}/raw/main/icon.png" && DOWNLOAD_SUCCESS=true || \
+            curl -L -o "$ICON_PATH" "${ICON_URL}/raw/master/icon.png" && DOWNLOAD_SUCCESS=true
+          fi
+          
+          # Try wget if curl failed
+          if [ "$DOWNLOAD_SUCCESS" = false ] && command -v wget &> /dev/null; then
+            wget -O "$ICON_PATH" "$ICON_URL" && DOWNLOAD_SUCCESS=true || \
+            wget -O "$ICON_PATH" "${ICON_URL}?raw=true" && DOWNLOAD_SUCCESS=true || \
+            wget -O "$ICON_PATH" "${ICON_URL}/raw/main/icon.png" && DOWNLOAD_SUCCESS=true || \
+            wget -O "$ICON_PATH" "${ICON_URL}/raw/master/icon.png" && DOWNLOAD_SUCCESS=true
+          fi
+          
+          # Check if icon exists and has content
+          if [ ! -f "$ICON_PATH" ] || [ ! -s "$ICON_PATH" ]; then
+            echo "❌ Failed to download icon!"
+            echo "Creating placeholder icon..."
             
-            if convert icon_raw.png -resize 512x512 icon_test.png 2>/dev/null; then
-              cp icon_raw.png icon_work.png
-            elif convert icon_raw.jpg -resize 512x512 icon_test.png 2>/dev/null; then
-              cp icon_raw.jpg icon_work.png
+            # Create placeholder icon menggunakan ImageMagick
+            if command -v convert &> /dev/null; then
+              convert -size 512x512 xc:#2196F3 -fill white -gravity center \
+                -font Arial -pointsize 80 -annotate 0 "📱" \
+                "$ICON_PATH" 2>/dev/null || \
+              convert -size 512x512 xc:#2196F3 -fill white -gravity center \
+                -font Arial -pointsize 60 -annotate 0 "APP" \
+                "$ICON_PATH"
             else
-              echo "⚠️ Gagal konversi icon, membuat default..."
-              convert -size 512x512 xc:#4CAF50 -fill white -gravity center -font Helvetica -pointsize 80 \
-                -annotate 0 "APP" icon_work.png
+              # Fallback: buat file PNG minimal (1x1 transparent pixel)
+              echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > "$ICON_PATH"
+            fi
+            echo "⚠️ Using placeholder icon"
+          else
+            echo "✅ Icon downloaded successfully: $(du -h "$ICON_PATH" | cut -f1)"
+          fi
+          
+          # Verify icon is valid image
+          if command -v file &> /dev/null; then
+            FILE_TYPE=$(file -b --mime-type "$ICON_PATH" 2>/dev/null || echo "")
+            if [[ "$FILE_TYPE" != image/* ]] && [[ "$FILE_TYPE" != "" ]]; then
+              echo "⚠️ Downloaded file is not an image: $FILE_TYPE"
+              echo "Creating placeholder icon..."
+              # Buat ulang placeholder
+              if command -v convert &> /dev/null; then
+                convert -size 512x512 xc:#2196F3 -fill white -gravity center \
+                  -font Arial -pointsize 80 -annotate 0 "📱" \
+                  "$ICON_PATH"
+              else
+                echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > "$ICON_PATH"
+              fi
             fi
           fi
           
-          if [ ! -f icon_work.png ] || [ ! -s icon_work.png ]; then
-            echo "⚠️ Icon corrupt, membuat default..."
-            convert -size 512x512 xc:#2196F3 -fill white -gravity center -font Helvetica -pointsize 80 \
-              -annotate 0 "WEB" icon_work.png
+          # Process icon with ImageMagick (resize and optimize)
+          if command -v convert &> /dev/null; then
+            echo "🔄 Processing icon with ImageMagick..."
+            # Create multiple sizes for better quality
+            convert "$ICON_PATH" -resize 512x512 -quality 90 "$ICON_PATH" 2>/dev/null || true
+            
+            # Create backup
+            cp "$ICON_PATH" "${ICON_PATH}.backup"
+            
+            # Ensure icon is square and minimum size
+            convert "$ICON_PATH" -background none -gravity center \
+              -extent 512x512 "$ICON_PATH" 2>/dev/null || true
           fi
           
-          echo "✅ Icon siap digunakan"
-          file icon_work.png
-
-      # ─── 6. RESIZE ICON ───────────────────────────────────────────
-      - name: 🖼️ Resize icon
-        run: |
-          mkdir -p app/src/main/res
+          # Create splash screen image
+          echo "🖼️ Creating splash screen image..."
+          SPLASH_PATH="assets/splash/splash.png"
           
-          for size in 48 72 96 144 192 512; do
-            mkdir -p app/src/main/res/mipmap-${size}dpi
-            convert icon_work.png -resize ${size}x${size} -background transparent -gravity center \
-              -extent ${size}x${size} app/src/main/res/mipmap-${size}dpi/ic_launcher.png
-            cp app/src/main/res/mipmap-${size}dpi/ic_launcher.png \
-               app/src/main/res/mipmap-${size}dpi/ic_launcher_round.png
-          done
+          if [ -f "$ICON_PATH" ] && [ -s "$ICON_PATH" ]; then
+            # Copy icon ke splash
+            cp "$ICON_PATH" "$SPLASH_PATH"
+            
+            # Process splash image
+            if command -v convert &> /dev/null; then
+              # Create splash with white background and centered icon
+              convert -size 200x200 xc:white "$SPLASH_PATH" -gravity center \
+                -resize 150x150 -composite "$SPLASH_PATH" 2>/dev/null || \
+              cp "$ICON_PATH" "$SPLASH_PATH"
+            fi
+            echo "✅ Splash image prepared"
+          else
+            echo "⚠️ Creating default splash image"
+            if command -v convert &> /dev/null; then
+              convert -size 200x200 xc:white -fill '#2196F3' -gravity center \
+                -font Arial -pointsize 60 -annotate 0 "📱" \
+                "$SPLASH_PATH"
+            else
+              echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > "$SPLASH_PATH"
+            fi
+          fi
           
-          mkdir -p app/src/main/res/drawable
-          cp app/src/main/res/mipmap-192dpi/ic_launcher.png app/src/main/res/drawable/ic_launcher.png
+          echo "✅ Icon processing completed!"
           
-          echo "✅ Icon selesai diresize"
           # ==================== UPDATE PUBSPEC ====================
           cat > pubspec.yaml << EOF
           name: $PROJECT_NAME
@@ -172,8 +232,7 @@ jobs:
               - assets/splash/
           EOF
           
-          # ==================== CREATE ANDROID MANIFEST FIRST ====================
-          # Kita buat manifest kustom terlebih dahulu agar siap diproses oleh generator ikon
+          # ==================== CREATE ANDROID MANIFEST ====================
           ESCAPED_APP_NAME=$(echo "${{ github.event.inputs.app_name }}" | sed 's/"/\\"/g')
           
           mkdir -p android/app/src/main
@@ -217,15 +276,18 @@ jobs:
           # ==================== GENERATE ICONS & SPLASH ====================
           echo "🖼️ Generating app icons and splash..."
           flutter pub get
+          
+          # Generate launcher icons
           flutter pub run flutter_launcher_icons:main -f pubspec.yaml
+          
+          # Generate splash screen
           flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
 
-          # ==================== CREATE MAIN.DART (SAFE ENVIRONMENT) ====================
+          # ==================== CREATE MAIN.DART ====================
           mkdir -p lib
           
           ESCAPED_URL=$(echo "${{ github.event.inputs.web_url }}" | sed 's/"/\\"/g')
           
-          # Menggunakan 'EOF' dengan tanda petik tunggal agar karakter dolar ($) di dalam kode Dart tidak dianggap variabel Linux shell
           cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
@@ -270,7 +332,6 @@ jobs:
             }
 
             void _initWebView() {
-              // Mengambil string URL yang disuntikkan secara dinamis saat runtime/build penggantian lewat sed
               final url = Uri.parse("URL_PLACEHOLDER");
 
               controller = WebViewController()
@@ -356,9 +417,13 @@ jobs:
           }
           EOF
           
-          # Suntikkan URL asli dan nama aplikasi ke dalam main.dart secara aman tanpa merusak sintaks shell
+          # Suntikkan URL dan nama aplikasi
           sed -i "s|URL_PLACEHOLDER|$ESCAPED_URL|g" lib/main.dart
           sed -i "s|Web App|$ESCAPED_APP_NAME|g" lib/main.dart
+          
+          # ==================== CLEANUP ====================
+          echo "🧹 Cleaning up temporary files..."
+          rm -f "${ICON_PATH}.backup" 2>/dev/null || true
           
       # ==================== BUILD APK ====================
       - name: Build APK
