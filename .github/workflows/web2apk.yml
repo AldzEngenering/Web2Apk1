@@ -73,13 +73,34 @@ jobs:
           sudo apt-get install -y imagemagick
           
           # Download icon with retry
+          echo "🔗 icon_url yang diterima dari input: ${{ github.event.inputs.icon_url }}"
           echo "Downloading icon..."
-          if curl -L --max-time 30 -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}"; then
-            echo "✅ Icon downloaded successfully"
-            
-            # Detect file type and convert to PNG
+          DOWNLOAD_OK=false
+          if curl -f -L --max-time 30 \
+               -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+               -o assets/icon/icon_downloaded "${{ github.event.inputs.icon_url }}"; then
+            echo "✅ HTTP request sukses (status 2xx)"
+
+            # Detect file type
             file assets/icon/icon_downloaded
-            
+
+            # Validasi bahwa file yang didownload benar-benar gambar valid
+            # (mencegah HTML error page / file kosong dianggap sebagai icon)
+            if identify assets/icon/icon_downloaded > /dev/null 2>&1; then
+              echo "✅ File terverifikasi sebagai gambar valid"
+              DOWNLOAD_OK=true
+            else
+              echo "⚠️ File yang didownload BUKAN gambar valid (kemungkinan link salah/expired/HTML error page)"
+              echo "--- Isi 200 byte pertama file (untuk debug) ---"
+              head -c 200 assets/icon/icon_downloaded
+              echo ""
+              echo "-----------------------------------------------"
+            fi
+          else
+            echo "⚠️ Download gagal (HTTP error / timeout) untuk URL: ${{ github.event.inputs.icon_url }}"
+          fi
+
+          if [ "$DOWNLOAD_OK" = true ]; then
             # Try to convert to PNG (handles various formats)
             if convert assets/icon/icon_downloaded -resize 512x512 -background white -flatten assets/icon/icon.png 2>/dev/null; then
               echo "✅ Icon converted to PNG successfully"
@@ -90,7 +111,7 @@ jobs:
               convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
             fi
           else
-            echo "⚠️ Icon download failed, creating default icon"
+            echo "⚠️ Menggunakan icon default karena icon_url tidak valid/gagal didownload"
             convert -size 512x512 xc:blue -fill white -gravity center -pointsize 80 -draw "text 0,0 'APP'" assets/icon/icon.png
           fi
           
@@ -195,7 +216,7 @@ jobs:
           # ==================== GENERATE ICONS & SPLASH ====================
           echo "🖼️ Generating app icons and splash..."
           flutter pub get
-          flutter pub run flutter_launcher_icons:main -f pubspec.yaml || echo "⚠️ Icon generation skipped"
+          flutter pub run flutter_launcher_icons:main -f pubspec.yaml
           flutter pub run flutter_native_splash:create --flavor android || echo "⚠️ Splash generation skipped"
 
           # ==================== CREATE MAIN.DART (SAFE ENVIRONMENT) ====================
